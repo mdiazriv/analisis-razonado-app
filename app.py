@@ -19,7 +19,12 @@ from datetime import datetime
 
 import streamlit as st
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "ar_scripts"))
+# Funciona tanto si ar_engine.py/assemble.py/etc. están en una subcarpeta "ar_scripts" (como en el
+# zip original) como si quedaron en la misma carpeta que este archivo (ej. al subirlos sueltos a un
+# repositorio de GitHub) — usa la que exista.
+_here = os.path.dirname(os.path.abspath(__file__))
+_scripts_dir = os.path.join(_here, "ar_scripts")
+sys.path.insert(0, _scripts_dir if os.path.isdir(_scripts_dir) else _here)
 import assemble  # noqa: E402
 
 st.set_page_config(page_title="Análisis Razonado — Hortifrut", page_icon="📊", layout="centered")
