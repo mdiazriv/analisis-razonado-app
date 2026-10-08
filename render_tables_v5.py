@@ -82,7 +82,17 @@ def render_table(wb, spec, out_path, dpi=300):
     # ROW_H_BASE is set large enough (0.28") to accommodate 2-line wraps at 9pt
     row_heights = [ROW_H_BASE] * n_rows
 
-    FIG_H = n_rows * ROW_H_BASE + 2*MARGIN + FN_H
+    # group_gaps: cuando la lista de filas salta (sub-tablas no contiguas en la hoja, ej. Risks),
+    # inserta un espacio visual extra antes del salto para que se vean como bloques separados.
+    group_gaps = spec.get('group_gaps', False)
+    GAP_H = ROW_H_BASE * 0.6
+    extra_gaps = [0.0] * n_rows
+    if group_gaps:
+        for ri in range(1, n_rows):
+            if row_nums[ri] - row_nums[ri-1] > 1:
+                extra_gaps[ri] = GAP_H
+
+    FIG_H = n_rows * ROW_H_BASE + sum(extra_gaps) + 2*MARGIN + FN_H
 
     fig, ax = plt.subplots(figsize=(FIG_W, FIG_H))
     AX_H = FIG_H / FIG_W
@@ -94,10 +104,11 @@ def render_table(wb, spec, out_path, dpi=300):
 
     BLACK=(0,0,0); YELLOW=(1.0,0.867,0.0); WHITE=(1.0,1.0,1.0)
 
-    # Y positions (constant spacing since all rows same height)
+    # Y positions (constant spacing since all rows same height, plus any group gap)
     row_y_tops = []
     y_cur = Y0
-    for rh in row_heights:
+    for ri, rh in enumerate(row_heights):
+        y_cur -= extra_gaps[ri] / FIG_W
         row_y_tops.append(y_cur)
         y_cur -= rh / FIG_W
 
@@ -352,7 +363,7 @@ TABLES = {
     bold_rows={2,10,11,23,24}, total_rows={10,23,24}, header_rows={0,1},
     center_cols=set(range(1,9)),
     col_widths=[0.27,0.093,0.093,0.093,0.083,0.083,0.083,0.083,0.038],
-    fig_w=9.5, font_size=7.5, row_h=0.30,
+    fig_w=7.4, font_size=8.0, row_h=0.32,
     label_shorten={
         5:  'Deudores comerc. y otras\nctas por cobrar, ctes.',
         6:  'Ctas Cobrar Entidades\nRelacionadas, ctes.',
@@ -370,9 +381,11 @@ TABLES = {
     rows=[32,33,34,35,36,37,38,39,40,41,42],
     bold_rows={0,1,10}, total_rows={10}, header_rows={0,1}, center_cols={1,2,3,4,5},
     col_widths=[0.30,0.14,0.14,0.14,0.14,0.14],
+    fig_w=6.8, font_size=9.5, row_h=0.33,
  ),
 
- # Risks: two sub-tables. % stored as decimals → show as integer %
+ # Risks: two sub-tables (filas 2-4 y 8-10, no contiguas en la hoja) -> group_gaps las separa
+ # visualmente, igual que en el Word original. % stored as decimals → show as integer %
  'Risks': dict(
     sheet='Risks',
     cols=[(4,'str'),(5,'num'),(6,'num'),(7,'num'),(8,'num'),(9,'num'),(10,'num')],
@@ -384,6 +397,7 @@ TABLES = {
     label_shorten={3: 'Severidad\ndel Riesgo'},
     # % rows: ri=2 and ri=5 have decimal values → format as %
     pct_rows={2,5},  # these rows get auto_pct formatting for cols 1-6
+    fig_w=6.8, font_size=9.5, row_h=0.36, group_gaps=True,
  ),
 
  # Riesgos criticos: Tipo, Nombre, Descripcion, Controles (all text, need wrapping)
@@ -393,8 +407,8 @@ TABLES = {
     rows=[2,3,4],
     bold_rows={0}, total_rows=set(), header_rows={0},
     center_cols=set(), col_widths=[0.09,0.17,0.37,0.37],
-    fig_w=10.0, row_h=1.0, font_size=7.0,
-    max_lines=8, wrap_all_cols=True,
+    fig_w=7.2, row_h=2.0, font_size=8.5,
+    max_lines=16, wrap_all_cols=True,
  ),
 
  'Seguros': dict(
