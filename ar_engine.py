@@ -6,6 +6,21 @@ Cubre: Resumen EBITDA, Análisis Resultado (bridge 6M y 12M), Ingresos (con driv
 import openpyxl
 from decimal import Decimal, ROUND_HALF_UP
 
+# Etiqueta fija que acompaña, resaltada en amarillo, a toda causa de negocio que no se puede derivar
+# del Excel y que se traspasa tal cual venía en el Word anterior para que se revise cada trimestre.
+CAUSA_TAG = "CAUSA NO DERIVABLE DEL EXCEL: actualizar si corresponde."
+
+def _with_cause(base_text, cause):
+    """Si `cause` viene (la frase de negocio ya existente en el Word anterior), la agrega resaltada
+    en amarillo junto con el CAUSA_TAG, encadenada con una coma (como venía redactada en el documento
+    original). Si no hay causa previa disponible, agrega solo el CAUSA_TAG para que la persona
+    responsable complete el motivo. Si `base_text` terminaba en punto, se lo saca antes de encadenar
+    la causa, para no dejar un punto seguido de una frase en minúscula."""
+    text = base_text[:-1] if base_text.endswith('.') else base_text
+    if cause:
+        return text + f", [[{cause} ({CAUSA_TAG})]]"
+    return text + f", [[{CAUSA_TAG}]]"
+
 def load(path):
     return openpyxl.load_workbook(path, data_only=True)
 
@@ -175,15 +190,20 @@ def bridge_factor_lead_in(label, cur, prior, delta):
                'Variación desfavorable en la participación en las ganancias de asociadas por'
     return f"{label}: variación por"
 
-def bridge_factor_text(label, cur, prior, delta, period='6m'):
+def bridge_factor_text(label, cur, prior, delta, period='6m', cause=None):
+    """cause: frase de causa de negocio ya existente en el Word anterior para este mismo factor (si
+    la hay). Si no hay (ej. un factor que se agrega este trimestre por magnitud y no aparecía antes),
+    no se agrega ninguna marca — el número ya lo explica todo."""
     lead = bridge_factor_lead_in(label, cur, prior, delta)
     cur_lbl = 'a Jun26' if period == '6m' else 'en los 12M T25/26'
     prior_lbl = 'a Jun25' if period == '6m' else 'en los 12M T24/25'
-    return (
+    base = (
         f"{lead} US${fmt_millones(cur)} millones {cur_lbl}, en comparación con "
-        f"US${fmt_millones(prior)} millones {prior_lbl} ({sign_str(delta)}US${fmt_millones(delta)} millones)"
-        f" [[CAUSA NO DERIVABLE DEL EXCEL: completar motivo de negocio si corresponde]]."
+        f"US${fmt_millones(prior)} millones {prior_lbl} ({sign_str(delta)}US${fmt_millones(delta)} millones)."
     )
+    if cause:
+        base = base[:-1] + f", [[{cause} ({CAUSA_TAG})]]."
+    return base
 
 def p_ganancia_controladora_12m(wb):
     S = 'Ganancia Atribuible'
@@ -413,27 +433,27 @@ def p_costoventa_6m(wb):
         f"ingresos de actividades ordinarias a Jun26, mientras que a Jun25 alcanzaban un {fmt_pct(abs(ratio_prior))}%."
     )
 
-def p_costoventa_12m(wb):
+def p_costoventa_12m(wb, cause=None):
     S='Costos'
     cur=abs(c(wb,S,'J6')); prior=abs(c(wb,S,'L6')); pct=c(wb,S,'N6')
     ratio_cur=c(wb,S,'J27'); ratio_prior=c(wb,S,'L27')
-    return (
+    base = (
         f"Los costos de ventas de los 12M T25/26 alcanzaron US${fmt_millones(cur, force_decimals=0)} millones, "
         f"representando un {inc_dec(pct)} del {fmt_pct(pct)}% respecto a los US${fmt_millones(prior, force_decimals=0)} "
         f"millones registrados en los 12M T24/25, explicado también por los mayores volúmenes comercializados. "
         f"Los costos de ventas representaron un {fmt_pct(abs(ratio_cur))}% de los ingresos de actividades ordinarias "
-        f"en los 12M T25/26, comparado con el {fmt_pct(abs(ratio_prior))}% en los 12M T24/25"
-        f" [[CAUSA NO DERIVABLE DEL EXCEL: completar motivo de la variación residual, ej. 'productores terceros']]."
+        f"en los 12M T25/26, comparado con el {fmt_pct(abs(ratio_prior))}% en los 12M T24/25."
     )
+    return _with_cause(base, cause)
 
-def p_gastosadmin_6m(wb):
+def p_gastosadmin_6m(wb, cause=None):
     S='Costos'
     cur=abs(c(wb,S,'D8')); prior=abs(c(wb,S,'F8')); pct=c(wb,S,'H8')
-    return (
+    base = (
         f"Los gastos de administración a Jun26 alcanzaron US${fmt_millones(cur)} millones, representando un "
-        f"{inc_dec(pct)} del {fmt_pct(pct)}% con respecto a Jun25"
-        f" [[CAUSA NO DERIVABLE DEL EXCEL: completar motivo, ej. 'provisiones no recurrentes']]."
+        f"{inc_dec(pct)} del {fmt_pct(pct)}% con respecto a Jun25."
     )
+    return _with_cause(base, cause)
 
 def p_otrosgastos_6m(wb):
     S='Costos'
@@ -443,15 +463,12 @@ def p_otrosgastos_6m(wb):
         f"US${fmt_millones(cur)} millones a Jun26, en comparación con US${fmt_millones(prior)} millones a Jun25."
     )
 
-def p_deterioro_6m(wb):
+def p_deterioro_6m(wb, cause_cur=None, cause_prior=None):
     S='Costos'
     cur=abs(c(wb,S,'D13')); prior=abs(c(wb,S,'F13'))
-    return (
-        f"El gasto por deterioro de valor de activos a Jun26 fue de US${fmt_millones(cur)} millones"
-        f" [[CAUSA NO DERIVABLE DEL EXCEL: completar motivo del deterioro Jun26]], en comparación con "
-        f"US${fmt_millones(prior)} millones a Jun25"
-        f" [[CAUSA NO DERIVABLE DEL EXCEL: completar motivo del deterioro Jun25]]."
-    )
+    frase_cur = _with_cause(f"El gasto por deterioro de valor de activos a Jun26 fue de US${fmt_millones(cur)} millones", cause_cur)
+    frase_prior = _with_cause(f"en comparación con US${fmt_millones(prior)} millones a Jun25", cause_prior)
+    return f"{frase_cur}, {frase_prior}"
 
 def p_otroscomponentes_6m(wb):
     S='Otros ingresos(gastos)'
@@ -520,16 +537,16 @@ def p_razon_acida(wb):
         f"{inc_dec(cur-prior,'incremento','disminución')} en relación con Dic25."
     )
 
-def p_razon_endeudamiento(wb):
+def p_razon_endeudamiento(wb, cause=None):
     IF='Ind. Financieros'; BAL='Balance'
     cur=c(wb,IF,'E11'); pct=c(wb,IF,'G11')
     pt_pct=c(wb,BAL,'H13')
-    return (
+    base = (
         f"La razón de endeudamiento {inc_dec(pct,'aumentó','disminuyó')} en {fmt_pct(abs(pct))}% con respecto a "
         f"Dic25, llegando a {fmt_veces(cur)} veces, explicado principalmente por la "
         f"{inc_dec(pt_pct,'alza','reducción')} de los pasivos totales en un {fmt_pct(abs(pt_pct))}%"
-        f" [[CAUSA NO DERIVABLE DEL EXCEL: confirmar si aplica 'asociado principalmente a la estacionalidad del negocio' u otra razón]]."
     )
+    return _with_cause(base, cause)
 
 def p_estructura_deuda(wb):
     S='Ind. Financieros'
@@ -543,16 +560,16 @@ def p_estructura_deuda(wb):
         f"a Dic25 a {fmt_pct(cur_lp)}% a Jun26."
     )
 
-def p_cobertura_gf(wb):
+def p_cobertura_gf(wb, cause=None):
     IR='Ind. Rentabilidad'
     cur=c(wb,IR,'C2'); prior=c(wb,IR,'D2')
-    return (
+    base = (
         f"El índice de cobertura de gastos financieros se ubica en {fmt_veces(cur)} veces a Jun26, "
         f"{inc_dec(cur-prior,'mejorando','empeorando')} desde las {fmt_veces(prior)} veces de Jun25, debido a la "
         f"mayor utilidad antes de impuestos. Por su parte, los costos financieros a Jun26 presentan un "
         f"{inc_dec(1,'incremento')} respecto a Jun25"
-        f" [[CAUSA NO DERIVABLE DEL EXCEL: confirmar motivo, ej. 'costos de prepagos de deuda realizados durante el período']]."
     )
+    return _with_cause(base, cause)
 
 def p_rentabilidad_patrim_controladora(wb):
     IR='Ind. Rentabilidad'; GA='Ganancia Atribuible'
@@ -640,7 +657,7 @@ def _top_items(wb, labels, top_n=3):
     items.sort(key=lambda x: abs(x[1]['delta']), reverse=True)
     return items[:top_n]
 
-def p_activos_nocorrientes_bridge(wb):
+def p_activos_nocorrientes_bridge(wb, cause=None):
     total = _fecu_row(wb, 'Total Activos no corrientes')
     top = _top_items(wb, ACTIVOS_NC_LABELS, 3)
     ppe_label, ppe = top[0]
@@ -651,13 +668,16 @@ def p_activos_nocorrientes_bridge(wb):
     rest = ', '.join(rest_parts)
     verbo = 'Reducción' if total['delta'] < 0 else 'Incremento'
     lead = f"{verbo} en activos no corrientes en US${fmt_millones(abs(total['delta']))} millones respecto a Dic25:"
+    # Nota: "compensado por inversiones también del período" es una frase genérica (no es una causa de
+    # negocio puntual del trimestre, ni algo no derivable del Excel), así que no se resalta — si en
+    # algún trimestre hay un motivo más específico que agregar, se puede pasar por `cause`.
+    compensado_clause = "compensado por inversiones también del período" if not cause else \
+        _with_cause("compensado por inversiones también del período", cause)
     return (
         "{{" + lead + "}} "
         f"Explicado principalmente por la {inc_dec(ppe['delta'],'alza','reducción')} en {ppe_label} "
-        f"(US${fmt_millones(ppe['delta'])} millones) asociado a la depreciación del período, compensado por "
-        f"inversiones también del período"
-        f" [[CAUSA NO DERIVABLE DEL EXCEL: confirmar frase de contexto si aplica]]. Adicionalmente, se explica por "
-        f"{rest}, entre otras variaciones menores."
+        f"(US${fmt_millones(ppe['delta'])} millones) asociado a la depreciación del período, {compensado_clause}. "
+        f"Adicionalmente, se explica por {rest}, entre otras variaciones menores."
     )
 
 def p_activos_corrientes_bridge(wb):
@@ -718,6 +738,48 @@ def p_patrimonio_bridge(wb):
         f"US${fmt_millones(patr['cur'])} millones, explicado principalmente por la ganancia del período por "
         f"US${fmt_millones(ganancia_cur)} millones."
     )
+
+# ============================================================
+# SECTION: PREÁMBULO Y TÍTULOS DE SECCIÓN (no dependen del Excel, solo del período)
+# ============================================================
+# Estos párrafos no traen ninguna cifra (solo fechas/etiquetas de período), pero SÍ hay que
+# regenerarlos cada trimestre: el Word base es el informe del trimestre ANTERIOR, así que sin esto
+# quedarían con la fecha/mes del trimestre anterior en vez del actual.
+def p_titulo_fecha(periods):
+    return f"Al {periods['CUR_LONG']}"
+
+def p_preambulo_1(periods):
+    return (
+        f"El presente análisis razonado ha sido preparado para el periodo terminado al "
+        f"{periods['CUR_LONG']}, comparándose con los estados financieros al "
+        f"{periods['PREAMBULO_REF_LONG']} ({periods['CUR_SHORT']} y {periods['PREAMBULO_REF_SHORT']}, "
+        f"respectivamente)."
+    )
+
+def p_preambulo_2(periods):
+    # La primera mención usa el par "25/26" sin el prefijo "T" (que solo aparece luego, entre
+    # comillas, al introducir la abreviatura) — así está redactado en el documento original.
+    season_cur_bare = periods['SEASON_CUR'][1:]
+    season_prior_bare = periods['SEASON_PRIOR'][1:]
+    return (
+        "Dado que la Compañía administra sus operaciones con una visión de temporada agrícola (1 de "
+        "julio a 30 de junio) y que este es el criterio relevante para este tipo de negocios, en este "
+        f"análisis también se incluye la comparación de {periods['SEASON_MESES_PALABRA']} meses de las "
+        f"temporadas {season_cur_bare} y {season_prior_bare} (“{periods['SEASON_CUR']}” "
+        f"y “{periods['SEASON_PRIOR']}”, respectivamente)."
+    )
+
+def p_header_ebitda_acumulado(periods):
+    return f"Análisis EBITDA acumulado a {periods['CUR_MONTH_LOWER_YEAR']}"
+
+def p_header_resultado_calendario(periods):
+    return f"Análisis Resultado a {periods['CUR_MONTH_LOWER_YEAR']}"
+
+def p_header_resultado_temporada(periods):
+    return f"Análisis Resultado temporada {periods['SEASON_RANGE_LONG']}"
+
+def p_header_ingresos_acumulados(periods):
+    return f"Análisis Ingresos acumulados a {periods['CUR_MONTH_CAP']}"
 
 if __name__ == '__main__':
     import sys
