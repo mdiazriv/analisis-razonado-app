@@ -25,8 +25,13 @@ parte del texto narrativo regenerados automáticamente a partir del Excel.
    en tu computador; los archivos no se envían a ningún servidor externo.
 
 2. Sube el Excel del trimestre (con la misma estructura de hojas de siempre) y el Word del
-   Análisis Razonado (puede ser el del trimestre anterior — se usa como plantilla; su
-   estructura de títulos y secciones debe mantenerse igual).
+   Análisis Razonado **del trimestre inmediatamente anterior** — se usa como plantilla; su
+   estructura de títulos y secciones debe mantenerse igual. Es decir: para generar junio subes
+   el Word de marzo, para septiembre el de junio, para diciembre el de septiembre, y para marzo
+   del año siguiente el de diciembre. La app funciona con los 4 cierres (marzo, junio,
+   septiembre, diciembre): el período del informe (fechas, "Jun26"/"Dic25"/"T25/26", cantidad de
+   meses, etc.) se deriva solo del Excel que subas, sin importar de qué cierre venga el Word
+   base.
 
 3. Haz clic en **"Generar Análisis Razonado actualizado"** y descarga el Word resultante.
 
@@ -40,6 +45,10 @@ parte del texto narrativo regenerados automáticamente a partir del Excel.
 
 ## Qué se automatiza
 
+- **El título, el párrafo preámbulo y los encabezados de sección** ("Al [fecha]", "Análisis
+  EBITDA acumulado a...", "Análisis Resultado temporada...", etc.) se regeneran con la fecha y
+  el período correctos de este cierre — así el informe nunca queda con la fecha del trimestre
+  anterior (la del Word que subiste) pegada en el título o en los encabezados.
 - **Todas las cifras y porcentajes** de los párrafos cubiertos (ver lista en
   `ar_scripts/assemble.py`, variable `SINGLE_TEMPLATES`): EBITDA, Resultado (bridge de 6 meses
   y de 12 meses/temporada), Ingresos (con driver volumen/precio), Costos y Gastos, Indicadores
@@ -64,6 +73,14 @@ administración (qué provisión), o frases de contexto puntuales. La cifra que 
 frase (ej. "US$5,79 millones") sí se actualiza sola; solo la explicación cualitativa queda
 resaltada.
 
+La app **mantiene la frase de causa tal como venía escrita en el Word que subiste** (no inventa
+ni reemplaza el motivo) y le agrega, también resaltado, el aviso en mayúscula "CAUSA NO DERIVABLE
+DEL EXCEL: actualizar si corresponde." — así solo tienes que leerla y confirmar que sigue
+aplicando ese trimestre, o corregirla si cambió el motivo. Si en algún trimestre futuro cambia
+tanto la redacción del Word que la app ya no logra identificar dónde estaba la frase de causa
+anterior, el párrafo queda solo con el aviso en amarillo (sin frase previa) para que la completes
+tú misma desde cero — revisa el detalle del proceso (`[AVISO]`) si esto ocurre.
+
 ## Limitaciones de esta primera versión (V1)
 
 - **Indicadores de Actividad y Rentabilidad (tablas de imagen):** estas dos hojas cambiaron de
@@ -80,6 +97,18 @@ resaltada.
   original en algunos párrafos del bridge de Balance (orden de los ítems, conectores como
   "y"/"," ). El contenido numérico siempre es correcto; son matices de estilo que puedes
   ajustar con un vistazo rápido si quieres el calce perfecto.
+- **Si subes como Word base un informe real de septiembre** (en vez de uno generado por esta
+  misma app, que siempre queda con la redacción "estilo junio"): el informe original de
+  septiembre junta en un solo párrafo breve, en el resumen del período, contenido que en
+  marzo/junio/diciembre aparece más adelante como intro + 2 viñetas separadas. Esos 3 párrafos
+  puntuales pueden no encontrarse (apareciendo como `[AVISO]`) en ese caso específico. Esto no
+  aplica si el Word base ya fue generado por esta app en un trimestre anterior, ni a los Words
+  originales de marzo, junio o diciembre.
+- La redacción exacta para el cierre de **marzo** se validó derivando las etiquetas de período
+  correctamente, pero sin tener todavía un informe real de marzo contra el cual confirmar cada
+  frase palabra por palabra (sí se validó contra informes reales de junio, septiembre y
+  diciembre). Si algún párrafo de un informe de marzo generado por la app no calza exactamente
+  con la redacción esperada, avísame para ajustar el patrón correspondiente.
 
 ## Cómo funciona (para referencia futura)
 
