@@ -4,6 +4,13 @@ App local (no sube nada a internet) que toma el Excel trimestral de datos financ
 Word del Análisis Razonado, y devuelve un Word actualizado: con las tablas (imágenes) y gran
 parte del texto narrativo regenerados automáticamente a partir del Excel.
 
+**Novedades de esta versión:** las tablas de Indicadores de Actividad y de Rentabilidad ya se
+actualizan solas (antes quedaban con los valores del trimestre anterior porque la hoja de la que
+se leían en el Excel cambió de nombre/estructura y el renderizador no se había actualizado para
+seguirla); además, un barrido final corrige fechas/etiquetas de período sueltas en todo el
+documento (ver "Qué se automatiza" abajo) y varias frases de causa-efecto se reconocen mejor en
+los informes reales de septiembre y diciembre.
+
 ## Instalación (una sola vez)
 
 1. Instala Python 3.10 o superior si no lo tienes.
@@ -54,8 +61,9 @@ parte del texto narrativo regenerados automáticamente a partir del Excel.
   y de 12 meses/temporada), Ingresos (con driver volumen/precio), Costos y Gastos, Indicadores
   de Actividad, Indicadores Financieros y de Rentabilidad, Deuda Financiera Neta, y el bridge
   del Estado de Situación Financiera (Activos, Pasivos, Patrimonio).
-- Las **tablas en forma de imagen** del Word (EBITDA, Ingresos, Costos, Balance, DFN, etc.) se
-  vuelven a generar desde el Excel y se insertan reemplazando las imágenes anteriores.
+- Las **tablas en forma de imagen** del Word (EBITDA, Ingresos, Costos, Balance, DFN,
+  Indicadores de Actividad, Indicadores de Rentabilidad, etc.) se vuelven a generar desde el
+  Excel y se insertan reemplazando las imágenes anteriores.
 - El **punteo de factores** que explican la variación de la Ganancia Atribuible (6M y 12M):
   se seleccionan automáticamente los de mayor magnitud (umbral US$3 millones), ordenados de
   mayor a menor impacto, separando los que ayudaron del resultado de los que lo compensaron
@@ -64,6 +72,12 @@ parte del texto narrativo regenerados automáticamente a partir del Excel.
 - Las frases de "causa y efecto" comparativas (ej. "explicado por el crecimiento en los
   ingresos de X%, compensado por Y") se regeneran solas comparando las variaciones del Excel —
   **no** quedan marcadas para revisión.
+- **Barrido final de fechas/etiquetas sueltas:** al terminar, la app recorre todo el documento
+  una vez más y corrige cualquier mención de la fecha, el "MesAA" o la temporada del trimestre
+  BASE que haya quedado sin actualizar — útil sobre todo en secciones que todavía no tienen su
+  propio párrafo cubierto (Riesgos, Seguros, Exposición Cambiaria, Vencimientos, Fair Value de
+  fruta) y en frases de contexto libre que acompañan a los bridges de resultado, cuya redacción
+  varía demasiado de trimestre a trimestre como para anclarlas una por una.
 
 ## Qué queda resaltado en amarillo (revisión manual)
 
@@ -83,16 +97,15 @@ tú misma desde cero — revisa el detalle del proceso (`[AVISO]`) si esto ocurr
 
 ## Limitaciones de esta primera versión (V1)
 
-- **Indicadores de Actividad y Rentabilidad (tablas de imagen):** estas dos hojas cambiaron de
-  formato de columnas en el Excel más reciente respecto al archivo original con el que se
-  construyó el renderizador de tablas, y no se volvieron a especificar por precaución (para no
-  arriesgar un renderizado incorrecto). Estas dos imágenes **no se actualizan** todavía — hay
-  que reemplazarlas a mano, o pedir que se agregue el soporte una vez confirmado el layout
-  definitivo de esas hojas.
 - **Flujo de Efectivo:** es una tabla nativa de Word (no una imagen), no está cubierta en esta
   versión.
-- **Sección de Riesgos** (exposición cambiaria, sensibilidad de tasa, margen de valor
-  razonable de fruta): los números sueltos de esta sección no están cubiertos todavía.
+- **Sección de Riesgos, Seguros, Exposición Cambiaria, Vencimientos y Fair Value de fruta:** la
+  app no regenera el contenido específico de estas secciones (montos, porcentajes), pero sí
+  corrige automáticamente cualquier fecha u referencia de período suelta que haya quedado del
+  trimestre anterior (ver "Barrido final" más abajo), para que al menos no queden fechas
+  equivocadas aunque los montos sigan siendo del trimestre base.
+- **"Valor libro de la acción":** este indicador puntual no está cubierto todavía (ni la cifra ni
+  la fecha se actualizan solas); revísalo a mano cada trimestre.
 - Pequeñas diferencias de redacción pueden aparecer respecto al estilo exacto del informe
   original en algunos párrafos del bridge de Balance (orden de los ítems, conectores como
   "y"/"," ). El contenido numérico siempre es correcto; son matices de estilo que puedes
@@ -104,11 +117,44 @@ tú misma desde cero — revisa el detalle del proceso (`[AVISO]`) si esto ocurr
   puntuales pueden no encontrarse (apareciendo como `[AVISO]`) en ese caso específico. Esto no
   aplica si el Word base ya fue generado por esta app en un trimestre anterior, ni a los Words
   originales de marzo, junio o diciembre.
-- La redacción exacta para el cierre de **marzo** se validó derivando las etiquetas de período
-  correctamente, pero sin tener todavía un informe real de marzo contra el cual confirmar cada
-  frase palabra por palabra (sí se validó contra informes reales de junio, septiembre y
-  diciembre). Si algún párrafo de un informe de marzo generado por la app no calza exactamente
-  con la redacción esperada, avísame para ajustar el patrón correspondiente.
+- **El "barrido final de fechas/etiquetas sueltas"** (ver el detalle del proceso dentro de la
+  app) solo puede reconstruir el período del trimestre base si su **título original no fue
+  modificado a mano** ("Al [fecha]", en la primera página). Si subes como Word base un informe que
+  ya pasó por esta app y luego editaste manualmente, o uno cuyo título ya no corresponde a su
+  propio trimestre, este barrido no tendrá de dónde partir y lo avisará en el detalle del proceso
+  (`[AVISO] No pude determinar el período del documento base...`). Lo normal — partir siempre del
+  Word tal como salió del trimestre anterior — no tiene este problema.
+
+## Versión en inglés (Word + Excel)
+
+Más abajo en la misma página de la app hay una sección aparte **"🇬🇧 Versión en inglés"**:
+
+1. Sube el mismo Excel del trimestre y el Word del Análisis Razonado **en inglés** del trimestre
+   anterior (misma lógica de plantilla que la versión en español).
+2. Haz clic en **"Generar versión en inglés (Word + Excel)"**. La app entrega dos descargas:
+   - El **Word en inglés** actualizado (mismas frases/tablas que la versión en español, ya
+     traducidas y verificadas contra los informes en inglés de referencia).
+   - Una copia del **Excel traducida al inglés**, acotada a las 18 tablas que aparecen en el Word
+     (EBITDA, Ingresos, Costos, Balance, Exposición Cambiaria, Riesgos, Seguros, etc.): se quitan
+     las pestañas que no se usan en el informe (notas internas, hojas de chequeo, Flujo de
+     Efectivo, Covenants, etc.), y dentro de cada hoja que sí se conserva también se quitan las
+     filas y columnas que no pertenecen a esa tabla (filas de trabajo por debajo, columnas
+     auxiliares que no aparecen en la imagen) — queda igual de acotado a lo que se ve en el Word.
+     En lo que se conserva, las etiquetas de fila/columna de cada tabla, los rangos de fecha
+     ("Ene26 - Jun26" → "Jan26 - Jun26") y unidades comunes ("MUS$"→"ThUS$", "veces"→"times",
+     "Días"→"Days", "variación"→"Variation") quedan traducidos. **No** se traducen los nombres de
+     las pestañas (hojas), y las fórmulas del Excel quedan congeladas en su valor ya calculado
+     (varias fórmulas del libro apuntan a otros archivos externos; recalcularlas con esta app
+     arriesgaría romper esos vínculos, y como este Excel es para entregar —no para seguir
+     editando en vivo— los valores estáticos son seguros). Los banners que en el Excel original
+     combinan varias columnas (ej. "AÑO CALENDARIO (6 meses)" en EBITDA) quedan como texto normal
+     en una sola celda en vez de centrados sobre varias columnas, para evitar que al borrar
+     columnas el rango combinado quede desalineado del contenido.
+3. Revisa igual que la versión en español: texto resaltado en amarillo y el detalle del proceso.
+
+Si la sección no aparece en tu instalación, falta copiar `ar_scripts/assemble_en.py`,
+`ar_scripts/periods_en.py`, `ar_scripts/ar_engine_en.py` y `ar_scripts/excel_translator_en.py`
+(ya incluidos en este zip) a tu carpeta de la app.
 
 ## Cómo funciona (para referencia futura)
 
@@ -127,9 +173,14 @@ tú misma desde cero — revisa el detalle del proceso (`[AVISO]`) si esto ocurr
   - `periods.py`: deriva las etiquetas de período desde las fechas del Excel.
   - `assemble.py`: ubica los párrafos en el Word, los reemplaza, maneja el punteo de factores,
     y vuelve a renderizar las tablas-imagen.
-  - `render_tables_v5.py`: el renderizador de tablas a imagen (reutilizado del pipeline
-    anterior).
+  - `render_tables_v5.py`: el renderizador de tablas a imagen (compartido por español e inglés;
+    incluye `TABLES`/`TABLES_EN` con las traducciones verificadas de cada tabla).
+  - `ar_engine_en.py` / `periods_en.py` / `assemble_en.py`: equivalentes en inglés de
+    `ar_engine.py` / `periods.py` / `assemble.py`.
+  - `excel_translator_en.py`: genera la copia del Excel traducida al inglés (ver sección
+    "Versión en inglés" arriba).
 
 Si el Excel cambia de estructura (hojas, columnas) en algún trimestre, o si quieres sumar las
-secciones pendientes (Flujo de Efectivo, Riesgos, Indicadores de Actividad/Rentabilidad), avísame
-y actualizo `ar_engine.py`/`assemble.py` en consecuencia.
+secciones pendientes (Flujo de Efectivo, Riesgos, Seguros, Exposición Cambiaria, Vencimientos,
+Fair Value de fruta, Valor libro de la acción), avísame y actualizo
+`ar_engine.py`/`assemble.py`/`render_tables_v5.py` en consecuencia.
