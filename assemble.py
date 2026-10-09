@@ -18,32 +18,36 @@ MARK_RE = re.compile(r'\[\[([^\]]+)\]\]|\{\{([^}]+)\}\}')
 
 def set_paragraph_text(paragraph, text):
     """Reemplaza el contenido de un párrafo por `text`, resaltando en amarillo los tramos [[...]] y
-    poniendo en negrita los tramos {{...}}. Conserva fuente/tamaño del primer run original, pero no
-    hereda su negrita (se indica explícitamente con {{...}} donde corresponda)."""
-    base_font_name = None; base_size = None
+    poniendo en negrita los tramos {{...}}. Conserva fuente/tamaño/subrayado del primer run original
+    (el subrayado se conserva tal cual porque algunos subtítulos de sección vienen subrayados en el
+    Word base y deben seguir subrayados aunque se regenere el texto), pero no hereda su negrita (se
+    indica explícitamente con {{...}} donde corresponda)."""
+    base_font_name = None; base_size = None; base_underline = None
     if paragraph.runs:
         r0 = paragraph.runs[0]
         base_font_name = r0.font.name; base_size = r0.font.size
+        base_underline = r0.font.underline
     for r in list(paragraph.runs):
         r._element.getparent().remove(r._element)
 
     pos = 0
     for m in MARK_RE.finditer(text):
         if m.start() > pos:
-            _add_run(paragraph, text[pos:m.start()], base_font_name, base_size, None, False)
+            _add_run(paragraph, text[pos:m.start()], base_font_name, base_size, None, False, base_underline)
         if m.group(1) is not None:
-            _add_run(paragraph, m.group(1), base_font_name, base_size, None, True)
+            _add_run(paragraph, m.group(1), base_font_name, base_size, None, True, base_underline)
         else:
-            _add_run(paragraph, m.group(2), base_font_name, base_size, True, False)
+            _add_run(paragraph, m.group(2), base_font_name, base_size, True, False, base_underline)
         pos = m.end()
     if pos < len(text):
-        _add_run(paragraph, text[pos:], base_font_name, base_size, None, False)
+        _add_run(paragraph, text[pos:], base_font_name, base_size, None, False, base_underline)
 
-def _add_run(paragraph, text, font_name, size, bold, highlight):
+def _add_run(paragraph, text, font_name, size, bold, highlight, underline=None):
     run = paragraph.add_run(text)
     if font_name: run.font.name = font_name
     if size: run.font.size = size
     if bold is not None: run.bold = bold
+    if underline: run.font.underline = True
     if highlight:
         run.font.highlight_color = WD_COLOR_INDEX.YELLOW
     return run
@@ -151,7 +155,7 @@ SINGLE_TEMPLATES = [
     (r"^La (ganancia|pérdida)(\s*\(pérdida\))? atribuible a los propietarios de la controladora (fue de|se registr[oó] en) US\$[\d\.,\-]+ millones en los \d+M", E.p_ganancia_controladora_12m),
     (r"^Los ingresos de actividades ordinarias alcanzaron US\$[\d\.,]+ millones a \w+\d+,", E.p_ingresos_totales_6m),
     (r"^Las ventas del segmento de Fruta Fresca a \w+\d+ ", E.p_frutafresca_6m),
-    (r"^Los productos con valor agregado registraron (un incremento|una disminución|una reducción) en los ingresos por venta a \w+\d+", E.p_valoragregado_6m),
+    (r"^(Por su parte, )?[Ll]os productos con valor agregado registraron (un incremento|una disminución|una reducción) en los ingresos por venta a \w+\d+", E.p_valoragregado_6m),
     (r"^Los ingresos de actividades ordinarias alcanzaron US\$[\d\.,]+ millones en los \d+M", E.p_ingresos_totales_12m),
     (r"^Las ventas del segmento de Fruta Fresca en los \d+M", E.p_frutafresca_12m),
     (r"^Por su parte, el segmento de productos con valor agregado registró (un incremento|una reducción|una disminución)", E.p_valoragregado_12m),
@@ -159,7 +163,7 @@ SINGLE_TEMPLATES = [
     (r"^Los costos de ventas de los \d+M\s*T\d+/\d+ alcanzaron", E.p_costoventa_12m),
     (r"^Los gastos de administración a \w+\d+ alcanzaron", E.p_gastosadmin_6m),
     (r"^Los otros gastos, por función \(excluyendo el deterioro", E.p_otrosgastos_6m),
-    (r"^El gasto por deterioro de valor de activos a \w+\d+ fue de|^A \w+\d+, el gasto por deterioro de valor de activos fue de", E.p_deterioro_6m),
+    (r"^El gasto por deterioro de valor de activos a \w+\d+ fue de|^A \w+\d+, el gasto por deterioro de valor de activos fue de|^A \w+\d+, se registr[oó] un gasto por deterioro de valor de activos por", E.p_deterioro_6m),
     (r"^Los otros componentes del resultado registraron un costo", E.p_otroscomponentes_6m),
     (r"^A \w+\d+, se registr(aron gastos|ó un gasto) por impuesto a las ganancias", E.p_impuesto_6m),
     (r"^La rotación de los activos al \d+ de \w+ de \d+", E.p_rotacion_activos),
@@ -172,8 +176,8 @@ SINGLE_TEMPLATES = [
     (r"^El índice de cobertura de gastos financieros se ubica", E.p_cobertura_gf),
     (r"^La rentabilidad del patrimonio de la controladora", E.p_rentabilidad_patrim_controladora),
     (r"^Por su parte, la rentabilidad del patrimonio total", E.p_rentabilidad_patrim_total),
-    (r"^Al \d+ de \w+ de \d+, los activos totales se", E.p_activos_totales_intro),
-    (r"^(Reducción|Incremento) en activos no corrientes en", E.p_activos_nocorrientes_bridge),
+    (r"^Al \d+ de \w+ de \d+, los activos totales (se )?(incrementaron|aumentaron|redujeron|disminuyeron)", E.p_activos_totales_intro),
+    (r"(?i)(Reducción|Incremento) en activos no corrientes en", E.p_activos_nocorrientes_bridge),
     (r"(?i)(Reducción|Incremento) en activos corrientes en", E.p_activos_corrientes_bridge),
     (r"^Los pasivos totales (se )?(redujeron|incrementaron)", E.p_pasivos_bridge),
     (r"^El patrimonio total de la Compañía", E.p_patrimonio_bridge),
@@ -503,27 +507,74 @@ def _replace_bridge_span_split(doc, start, pos_texts, neg_texts, sep_sentence, i
             last_el = new_el
     return True
 
+def _rebuild_calendar_bridge(doc, items_texts, default_intro="Las principales variaciones se explican a continuación:"):
+    """Reconstruye el bloque de viñetas del bridge de Resultado CALENDARIO (el que sigue al párrafo
+    'Durante los N meses terminados en...') por POSICIÓN en vez de por redacción/estilo de párrafo.
+    Se probó con los 3 originales reales de Hortifrut (junio, septiembre, diciembre) y cada uno trae
+    una estructura distinta para este bloque: lista plana sin separador (junio); una sola viñeta con
+    estilo de lista y el resto de los factores en prosa normal, incluido el que compensa, plegado
+    dentro de la misma oración separadora (septiembre/diciembre); lista partida con separador propio,
+    con las viñetas negativas tampoco en estilo de lista (marzo, visto en un informe real generado por
+    un usuario). Intentar reconocer cada variante por su redacción exacta o por si el párrafo es
+    "List Paragraph" es fragil; en cambio, el tramo se ubica de forma confiable entre dos anclas que sí
+    son estables (el párrafo de ganancia/pérdida controladora calendario, ya regenerado antes de llamar
+    a esta función, y el header 'Análisis Resultado temporada...'), y dentro de ese tramo se separa:
+      - "lead": los párrafos iniciales que no mencionan una cifra en dólares (comentario de contexto
+        más la frase que introduce la lista, sea cual sea su redacción) — se dejan tal cual (un barrido
+        posterior en todo el documento se encarga de corregir fechas/etiquetas del trimestre anterior
+        que puedan mencionar).
+      - desde el primer párrafo con "US$" en adelante: se borra entero y se reemplaza por una lista
+        plana nueva en el estilo de referencia Jun26, clonando el formato del primer párrafo de ese
+        tramo (para no perder viñeta/fuente)."""
+    idx_gc, p_gc = find_paragraph(doc, r"^Durante los \d+ meses terminados en \w+\d+ se registró")
+    idx_end, p_end = find_paragraph(doc, r"^Análisis Resultado temporada")
+    if p_gc is None or p_end is None or idx_end <= idx_gc:
+        return False, "no ubiqué el tramo (intro o header de temporada no encontrados)"
+
+    zone = [p for p in doc.paragraphs[idx_gc + 1:idx_end] if p.text.strip() != '']
+    if not zone:
+        return False, "tramo vacío entre el resultado calendario y el header de temporada"
+
+    split_at = next((i for i, p in enumerate(zone) if 'US$' in p.text), None)
+    if split_at is None:
+        return False, "no encontré viñetas con cifras en el tramo"
+
+    lead = zone[:split_at]
+    old_bridge_paras = zone[split_at:]
+    needs_intro = not (lead and lead[-1].text.strip().endswith(':'))
+
+    template_el = old_bridge_paras[0]._p
+    parent = old_bridge_paras[0]._parent
+    insert_after_el = lead[-1]._p if lead else p_gc._p
+
+    if needs_intro:
+        intro_el = copy.deepcopy(template_el)
+        insert_after_el.addnext(intro_el)
+        set_paragraph_text(docx.text.paragraph.Paragraph(intro_el, parent), default_intro)
+        insert_after_el = intro_el
+
+    last_el = insert_after_el
+    for text in items_texts:
+        new_el = copy.deepcopy(template_el)
+        last_el.addnext(new_el)
+        set_paragraph_text(docx.text.paragraph.Paragraph(new_el, parent), text)
+        last_el = new_el
+
+    for p in old_bridge_paras:
+        p._p.getparent().remove(p._p)
+    return True, None
+
 def apply_bridge_bullets(doc, wb, periods, causes, log):
-    # --- Calendario: una sola lista plana (estilo Jun26) ---
+    # --- Calendario: una sola lista plana (estilo Jun26), reconstruida por posición ---
     # (los factores de este bridge no tienen causa histórica preservable: son viñetas nuevas cada
     # trimestre, no arrastran una frase de negocio puntual del Word anterior)
-    # El punto de entrada al bloque varía según el trimestre del documento base: junio usa "Las
-    # principales variaciones se explican a continuación"; septiembre/diciembre usan en cambio la
-    # misma frase partida en positivos/negativos que junio usa para la sección de temporada
-    # ("...se explica principalmente por los siguientes efectos negativos/positivos:") — cualquiera de
-    # las dos formas sirve como ancla de entrada, porque _collect_bridge_span después junta todo el
-    # tramo (ambos grupos y el separador, si lo hay) y lo reemplaza íntegro por la lista plana.
     # Aislado en try/except: un solo dato faltante en el Excel (p.ej. una hoja con estructura distinta
     # a la plantilla esperada) no debe impedir que se genere el resto del documento — igual que los
     # párrafos de apply_single_templates, que se procesan uno a uno.
     try:
         items_6m = build_bridge_items_6m(wb)
-        ok = _replace_bridge_span_flat(
-            doc,
-            r"Las principales variaciones se explican a continuación|se explica principalmente por los siguientes efectos (negativos|positivos)",
-            items_6m,
-        )
-        log.append(f"[{'OK' if ok else 'AVISO'}] Bridge calendario ({len(items_6m)} factores)")
+        ok, reason = _rebuild_calendar_bridge(doc, items_6m)
+        log.append(f"[{'OK' if ok else 'AVISO'}] Bridge calendario ({len(items_6m)} factores)" + (f": {reason}" if not ok else ""))
     except Exception as ex:
         log.append(f"[ERROR] Bridge calendario: {ex}")
 
@@ -563,11 +614,10 @@ def collect_and_render_tables(wb, word_path, log):
     if 'Indicadores1' not in wb.sheetnames and 'Ind. Financieros' in wb.sheetnames:
         RT.TABLES['Indicadores1']['sheet'] = 'Ind. Financieros'
 
+    # IndicadoresActividad/Rentabilidad: especificadas para la plantilla vigente desde Jun26 ('Ind.
+    # Actividad' / 'Ind. Rentabilidad', hojas separadas). Si algún Excel más antiguo no las trae con
+    # ese nombre/layout, el chequeo de abajo (spec['sheet'] not in wb.sheetnames) ya las salta solo.
     SKIP_KEYS = set()
-    if 'Indicadores2' not in wb.sheetnames:
-        # las 3 hojas se separaron con layouts distintos; no re-especificadas aún -> no tocar esas imágenes
-        SKIP_KEYS.add('IndicadoresActividad')
-        SKIP_KEYS.add('Rentabilidad')
 
     with zipfile.ZipFile(word_path, 'r') as z:
         rels = z.read('word/_rels/document.xml.rels').decode('utf-8')
@@ -657,6 +707,29 @@ def swap_media_bytes(docx_in_path, docx_out_path, image_map, log):
     shutil.rmtree(tmp)
     log.append(f"[OK] {repl} imágenes de tabla actualizadas")
 
+def apply_global_sweep(doc, old_periods, new_periods, log):
+    """Barrido final, de respaldo: recorre TODOS los párrafos del documento (incluidas secciones que
+    todavía no tienen un template dedicado — Riesgos, Seguros, Exposición Cambiaria, Vencimientos,
+    Fair Value de fruta — y las frases de contexto libre que acompañan a los bridges, cuya redacción es
+    demasiado variable para regenerar por anclas) y reemplaza cualquier mención suelta de las
+    etiquetas/fechas del trimestre del documento BASE que haya quedado sin actualizar, por las del
+    trimestre nuevo. Se edita a nivel de 'run' (no se usa set_paragraph_text), para no perder el
+    formato de párrafos que en su mayoría no necesitan ningún otro cambio. Si old_periods es None (no
+    se pudo determinar el período del documento base a partir de su título), no hace nada."""
+    if old_periods is None:
+        log.append("[AVISO] No pude determinar el período del documento base (título no reconocido); se omitió el barrido final de fechas sueltas.")
+        return
+    n_runs = 0
+    for p in doc.paragraphs:
+        for r in p.runs:
+            if not r.text:
+                continue
+            new_text = P.sweep_text(r.text, old_periods, new_periods)
+            if new_text != r.text:
+                r.text = new_text
+                n_runs += 1
+    log.append(f"[OK] Barrido final de fechas/etiquetas sueltas: {n_runs} fragmentos de texto corregidos")
+
 def generate(excel_path, word_path, out_path):
     log = []
     wb = openpyxl.load_workbook(excel_path, data_only=True)
@@ -664,10 +737,17 @@ def generate(excel_path, word_path, out_path):
     log.append(f"[INFO] Período detectado: {periods['CUR_SHORT']} vs {periods['PRIOR_SHORT']} / {periods['FY_PRIOR_SHORT']}")
 
     doc = docx.Document(word_path)
+
+    # Período del documento BASE (el trimestre anterior), reconstruido a partir de su título ANTES de
+    # sobrescribirlo — se usa al final para el barrido de respaldo (ver apply_global_sweep).
+    _, _title_para = find_paragraph(doc, r"^Al \d+ de \w+ de \d+\s*$")
+    old_periods = P.derive_old_periods_from_title(_title_para.text) if _title_para is not None else None
+
     causes = collect_original_causes(doc, log)
     apply_header_templates(doc, periods, log)
     apply_single_templates(doc, wb, periods, causes, log)
     apply_bridge_bullets(doc, wb, periods, causes, log)
+    apply_global_sweep(doc, old_periods, periods, log)
 
     image_map, img_dir = collect_and_render_tables(wb, word_path, log)
     fix_image_frame_sizes(doc, image_map, log)

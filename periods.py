@@ -123,6 +123,84 @@ def localize(text, periods):
         text = text.replace(ph, new)
     return text
 
+_MES_LARGO_TO_NUM = {m: i for i, m in enumerate(MESES_LARGO) if m}
+
+def parse_long_date(text):
+    """Extrae una fecha tipo 'Al 31 de marzo de 2026' o '...al 31 de diciembre de 2025...' del texto,
+    o None si no calza el patrón. Case-insensitive en el nombre del mes."""
+    import re
+    m = re.search(r'(\d{1,2}) de (\w+) de (\d{4})', text, re.IGNORECASE)
+    if not m:
+        return None
+    day = int(m.group(1))
+    mes_num = _MES_LARGO_TO_NUM.get(m.group(2).lower())
+    if mes_num is None:
+        return None
+    year = int(m.group(3))
+    try:
+        return datetime.date(year, mes_num, day)
+    except ValueError:
+        return None
+
+def derive_old_periods_from_title(title_text):
+    """A partir del texto del título del documento BASE ('Al dd de mes de yyyy', ya en estilo Jun26
+    antes de ser sobrescrito), reconstruye el período de ESE documento (el trimestre anterior), para
+    poder barrer después cualquier mención suelta de sus fechas/etiquetas que haya quedado sin
+    regenerar (secciones no cubiertas por un template, frases de contexto libres, etc.) y reemplazarla
+    por la del trimestre nuevo. El cierre de año fiscal anterior de cualquier cierre es siempre el 31 de
+    diciembre del año calendario anterior (confirmado contra los 4 cierres reales: Mar/Jun/Sep/Dic)."""
+    old_cur_date = parse_long_date(title_text)
+    if old_cur_date is None:
+        return None
+    old_prior_fy_date = datetime.date(old_cur_date.year - 1, 12, 31)
+    return derive_periods(None, cur_date=old_cur_date, prior_fy_date=old_prior_fy_date)
+
+def sweep_pairs(old_periods, new_periods):
+    """Pares (texto viejo -> texto nuevo) para barrer, en párrafos que NO se regeneran por un template
+    (secciones todavía no cubiertas, o frases de contexto libre cuya redacción es demasiado variable
+    para anclar), cualquier mención suelta de fechas/etiquetas del trimestre del documento BASE que haya
+    quedado sin actualizar. Si un valor viejo coincide con el nuevo (p.ej. FY_PRIOR_SHORT suele
+    mantenerse igual de un trimestre a otro dentro del mismo año fiscal), el reemplazo es un no-op
+    inofensivo. Se ordenan los compuestos ('NM T.../..') antes que sus partes sueltas."""
+    pairs = [
+        (f"{old_periods['SEASON_MESES']}M {old_periods['SEASON_CUR']}", f"{new_periods['SEASON_MESES']}M {new_periods['SEASON_CUR']}"),
+        (f"{old_periods['SEASON_MESES']}M{old_periods['SEASON_CUR']}", f"{new_periods['SEASON_MESES']}M{new_periods['SEASON_CUR']}"),
+        (f"{old_periods['SEASON_MESES']}M {old_periods['SEASON_PRIOR']}", f"{new_periods['SEASON_MESES']}M {new_periods['SEASON_PRIOR']}"),
+        (f"{old_periods['SEASON_MESES']}M{old_periods['SEASON_PRIOR']}", f"{new_periods['SEASON_MESES']}M{new_periods['SEASON_PRIOR']}"),
+        (old_periods['CUR_LONG'], new_periods['CUR_LONG']),
+        (old_periods['FY_PRIOR_LONG'], new_periods['FY_PRIOR_LONG']),
+        (old_periods['SEASON_CUR'], new_periods['SEASON_CUR']),
+        (old_periods['SEASON_PRIOR'], new_periods['SEASON_PRIOR']),
+        (old_periods['CUR_SHORT'], new_periods['CUR_SHORT']),
+        (old_periods['PRIOR_SHORT'], new_periods['PRIOR_SHORT']),
+        (old_periods['FY_PRIOR_SHORT'], new_periods['FY_PRIOR_SHORT']),
+    ]
+    # Sin duplicados ni pares no-op (viejo == nuevo ya es seguro de por sí, pero no vale la pena
+    # procesarlos), preservando el orden (compuestos primero).
+    seen = set()
+    out = []
+    for old, new in pairs:
+        if old == new or old in seen:
+            continue
+        seen.add(old)
+        out.append((old, new))
+    return out
+
+def sweep_text(text, old_periods, new_periods):
+    """Reemplaza en `text` cualquier mención de las etiquetas de período del documento BASE (viejas)
+    por las del trimestre nuevo, con el mismo esquema de dos pasadas por marcador que localize() (ver
+    su comentario) para evitar recapturas entre reemplazos."""
+    pairs = sweep_pairs(old_periods, new_periods)
+    placeholders = []
+    for i, (old, new) in enumerate(pairs):
+        ph = f"\x01{i}\x01"
+        if old in text:
+            text = text.replace(old, ph)
+            placeholders.append((ph, new))
+    for ph, new in placeholders:
+        text = text.replace(ph, new)
+    return text
+
 if __name__ == '__main__':
     import sys
     sys.path.insert(0, '.')
