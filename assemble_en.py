@@ -849,6 +849,13 @@ def _classify_free_runs(doc, anchor_regexes, is_list_fn):
 
 DEEPL_PROPOSAL_PREFIX_EN = "DeepL translation — please verify: "
 NO_DEEPL_PREFIX_EN = "SPANISH — DeepL not configured, translate manually: "
+# NO_DEEPL_FAILED_PREFIX_EN: mismo caso de "se quedó en español, pendiente de traducir a mano",
+# pero cuando DeepL SÍ está configurado y la llamada de todos modos falló (key inválida, cuota
+# agotada, problema de red) — antes se usaba el mismo NO_DEEPL_PREFIX_EN de arriba en los dos
+# casos, lo que llevó a Melissa a pensar que su API key no había quedado guardada ("Al parecer
+# DeepL aún no está bien configurado") cuando en realidad SÍ estaba configurada pero esa llamada
+# puntual había fallado. El motivo real queda en el log (ver más abajo, DT.get_last_error()).
+NO_DEEPL_FAILED_PREFIX_EN = "SPANISH — DeepL translation failed, translate manually: "
 
 _DIFF_WS_RE = re.compile(r'\s+')
 
@@ -929,17 +936,20 @@ def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_
             )
     else:
         log.append(
-            "[AVISO] (EN) No tengo el Word en español del trimestre anterior para comparar (sube el "
-            "'Word base a actualizar' en la sección en español de arriba): se tratará todo el texto "
-            "libre como 'cambiado' y se traducirá por completo, en vez de traducir solo lo que varió."
+            "[AVISO] (EN) No tengo el Word en español del trimestre anterior para comparar (súbelo en "
+            "el campo 'Word en ESPAÑOL del TRIMESTRE ANTERIOR' de esta misma sección, o en el 'Word "
+            "base a actualizar' de la sección en español de arriba): se tratará todo el texto libre "
+            "como 'cambiado' y se traducirá por completo, en vez de traducir solo lo que varió."
         )
 
     deepl_on = DT.is_configured()
     n_translated = 0
     n_fallback = 0
+    n_fallback_failed = 0  # de n_fallback: cuántos fueron porque DeepL SÍ estaba configurado pero falló (no por falta de key)
     n_unchanged = 0
     n_paras_mismatch = 0
     n_runs_no_prev = 0
+    deepl_error_reasons = []  # motivos únicos de falla vistos esta corrida (ver DT.get_last_error())
 
     for run_idx in range(n_common):
         es_paras = runs_es[run_idx]
@@ -967,6 +977,15 @@ def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_
             if translated:
                 new_texts.append(f"[[{DEEPL_PROPOSAL_PREFIX_EN}{_sanitize_for_markup(translated)}]]")
                 n_translated += 1
+            elif deepl_on:
+                # Configurado pero esta llamada puntual falló: distinto de "no configurado" (ver
+                # NO_DEEPL_FAILED_PREFIX_EN arriba) — se deja constancia del motivo real.
+                new_texts.append(f"[[{NO_DEEPL_FAILED_PREFIX_EN}{_sanitize_for_markup(es_text)}]]")
+                n_fallback += 1
+                n_fallback_failed += 1
+                reason = DT.get_last_error()
+                if reason and reason not in deepl_error_reasons:
+                    deepl_error_reasons.append(reason)
             else:
                 new_texts.append(f"[[{NO_DEEPL_PREFIX_EN}{_sanitize_for_markup(es_text)}]]")
                 n_fallback += 1
@@ -989,14 +1008,29 @@ def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_
             f"{n_translated} traducido(s) vía DeepL por haber cambiado"
         )
         if n_fallback:
-            msg += f", {n_fallback} dejado(s) en español pendiente de traducir a mano (cambiaron, pero DeepL no está configurado o falló esa traducción puntual)"
+            msg += f", {n_fallback} dejado(s) en español pendiente de traducir a mano"
         msg += ". Lo traducido queda resaltado en amarillo para que lo verifiques antes de publicar."
         log.append(msg)
-        if not deepl_on and (n_translated or n_fallback):
+        if not deepl_on and n_fallback:
             log.append(
                 "[AVISO] (EN) DeepL no está configurado (falta DEEPL_API_KEY en los Secrets de la app): "
                 "el texto libre que sí cambió respecto al trimestre anterior quedó en español, "
                 "resaltado, pendiente de traducir a mano."
+            )
+        if deepl_on and n_fallback_failed:
+            # Distinto del caso de arriba: la API key SÍ está configurada, pero la(s) llamada(s) a
+            # DeepL fallaron igual — mostrar el motivo real para que Melissa sepa qué revisar (no
+            # es "configúrala de nuevo", es un problema puntual: key inválida, cuota, red, etc.).
+            motivos = "; ".join(deepl_error_reasons) if deepl_error_reasons else "motivo no disponible"
+            # Tag propio [ALERTA-DEEPL] (no [ALERTA]): ese otro tag ya lo usa count_anchor_misses
+            # para avisar de un Word base equivocado, y app.py muestra un mensaje específico de
+            # "Word equivocado" para [ALERTA] — mezclar los dos acá mostraría ese mensaje erróneo
+            # para lo que en realidad es un problema de DeepL.
+            log.append(
+                f"[ALERTA-DEEPL] (EN) DeepL está configurado, pero {n_fallback_failed} traducción(es) "
+                f"fallaron igual. Motivo reportado por DeepL: {motivos}. Esos párrafos quedaron en "
+                "español, resaltados, pendientes de traducir a mano — revisa la API key y la cuenta "
+                "de DeepL (¿está verificada/activada? ¿tiene cuota disponible?)."
             )
     else:
         log.append("[AVISO] (EN) No encontré ningún tramo de texto libre para comparar/traducir.")

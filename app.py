@@ -206,17 +206,46 @@ else:
     )
     st.caption(
         "Súbelo después de dejar listo el Word en español definitivo de este trimestre (causas de "
-        "negocio completadas, y cualquier otro ajuste de redacción ya hecho). Es obligatorio porque "
-        "la app lo usa de dos formas: (1) toma las causas de negocio resaltadas en amarillo tal como "
-        "quedaron escritas, y (2) compara **todo el documento, párrafo por párrafo**, contra ese "
-        "mismo párrafo en el Word en español del **trimestre anterior** (el que subiste arriba, en "
-        "la sección en español) — no traduce todo de nuevo cada vez: solo el texto libre en español "
-        "(título, subtítulos, y sobre todo el bloque de factores de riesgo / seguros / valor justo "
-        "de la fruta) que realmente **cambió** respecto al trimestre pasado se marca y se propone una "
-        "traducción al inglés, resaltada en amarillo, para que la verifiques. El texto libre que no "
-        "cambió se deja tal cual está en el Word en inglés — su traducción ya fue usada y aprobada "
-        "antes, así que no hay razón para reemplazarla."
+        "negocio completadas, y cualquier otro ajuste de redacción ya hecho). La app toma de acá "
+        "las causas de negocio resaltadas en amarillo tal como quedaron escritas."
     )
+
+    # Word en español del TRIMESTRE ANTERIOR: punto de comparación para saber qué texto libre
+    # cambió de verdad este trimestre (ver assemble_en.translate_free_text_from_definitive_es).
+    # Antes esto se tomaba en silencio del "2. Word base a actualizar" de la sección en español de
+    # arriba (mismo archivo, reutilizado) — pero si esta sección se usa sola, en una sesión donde
+    # esa otra sección no tiene nada subido (o Melissa solo quiere regenerar el inglés sin volver a
+    # tocar la sección en español), ese campo queda vacío sin que se note, y la comparación se
+    # pierde: TODO el texto libre se trata como "cambiado" y queda marcado para traducir, incluso
+    # texto que en realidad no cambió (esto fue justamente lo que reportó Melissa: "toda la sección
+    # de riesgo quedó como pendiente de traducción... esto no debería haber cambiado"). Por eso
+    # ahora hay un uploader propio, independiente del de la sección en español, con un estado
+    # explícito de si hay o no punto de comparación ANTES de generar.
+    word_file_es_base_en = st.file_uploader(
+        "Word en ESPAÑOL del TRIMESTRE ANTERIOR (para comparar qué cambió; recomendado) (.docx)",
+        type=["docx"],
+        key="word_es_base_en",
+    )
+    _es_base_candidate = word_file_es_base_en or word_file
+    if word_file_es_base_en:
+        st.caption(
+            "✅ Tengo el Word en español del trimestre anterior (subido acá mismo): se compara "
+            "párrafo por párrafo y solo se marca para traducir el texto libre que de verdad cambió."
+        )
+    elif word_file:
+        st.caption(
+            "✅ Tengo el Word en español del trimestre anterior — reutilizando el mismo que subiste "
+            "arriba en \"2. Word base a actualizar\" (sección en español). Si es un archivo distinto, "
+            "súbelo en el campo de arriba."
+        )
+    else:
+        st.caption(
+            "⚠️ No tengo el Word en español del trimestre anterior (ni aquí ni en \"2. Word base a "
+            "actualizar\" arriba): no voy a poder distinguir qué texto libre cambió de verdad — "
+            "**todo** el texto libre (título, subtítulos, factores de riesgo, seguros, valor justo de "
+            "la fruta, etc.) se marcará como pendiente de traducir, aunque no haya cambiado. Sube el "
+            "Word en español del trimestre anterior arriba para evitar esto."
+        )
 
     if _DEEPL_ON:
         st.caption(
@@ -256,15 +285,16 @@ else:
             with open(word_es_edited_path, "wb") as f:
                 f.write(word_file_es_edited.getbuffer())
 
-            # El "Word base a actualizar" en español (sección en español, arriba) sirve de punto de
-            # comparación para saber qué texto libre cambió este trimestre (ver assemble_en.
-            # translate_free_text_from_definitive_es): si no se subió, la app igual funciona, pero
-            # traduce todo el texto libre en vez de solo lo que cambió (se avisa en el detalle).
+            # Punto de comparación para saber qué texto libre cambió este trimestre (ver
+            # assemble_en.translate_free_text_from_definitive_es): el uploader propio de esta
+            # sección si se usó, si no el de la sección en español (ver _es_base_candidate y los
+            # avisos de arriba) — si tampoco hay eso, la app igual funciona, pero traduce todo el
+            # texto libre en vez de solo lo que cambió (se avisa en el detalle del proceso).
             word_es_base_path = None
-            if word_file:
+            if _es_base_candidate:
                 word_es_base_path = os.path.join(tmp_en, "input_es_base.docx")
                 with open(word_es_base_path, "wb") as f:
-                    f.write(word_file.getbuffer())
+                    f.write(_es_base_candidate.getbuffer())
 
             with st.spinner("Generando Word en inglés..."):
                 try:
@@ -318,6 +348,7 @@ else:
     if en_results:
         log_en = en_results["log_en"]
         alertas_en = [l for l in log_en if l.startswith("[ALERTA]")]
+        alertas_deepl_en = [l for l in log_en if l.startswith("[ALERTA-DEEPL]")]
 
         if en_results["ok_word_en"] and en_results["data_word_en"]:
             if alertas_en:
@@ -326,7 +357,13 @@ else:
                     "equivocado: casi todo el texto narrativo quedó SIN actualizar (revisa el "
                     "detalle abajo antes de usar este archivo)."
                 )
-            else:
+            if alertas_deepl_en:
+                st.warning(
+                    "⚠️ DeepL está configurado, pero una o más traducciones fallaron igual: ese "
+                    "texto quedó en español, resaltado, pendiente de traducir a mano (revisa el "
+                    "motivo exacto en el detalle abajo)."
+                )
+            if not alertas_en and not alertas_deepl_en:
                 st.success("Word en inglés generado correctamente.")
             st.download_button(
                 "⬇️ Descargar Word en inglés",
@@ -352,7 +389,7 @@ else:
 
         with st.expander(
             "Ver detalle del proceso (Word + Excel en inglés)",
-            expanded=not (en_results["ok_word_en"] and en_results["ok_excel_en"]) or bool(alertas_en),
+            expanded=not (en_results["ok_word_en"] and en_results["ok_excel_en"]) or bool(alertas_en) or bool(alertas_deepl_en),
         ):
             st.markdown("**Word en inglés:**")
             avisos_en = [l for l in log_en if l.startswith("[AVISO]")]
@@ -361,6 +398,9 @@ else:
             if alertas_en:
                 st.markdown("_⚠️ Posible Word base equivocado:_")
                 st.code("\n".join(alertas_en))
+            if alertas_deepl_en:
+                st.markdown("_⚠️ DeepL configurado pero con fallas:_")
+                st.code("\n".join(alertas_deepl_en))
             if errores_en:
                 st.markdown("_Errores:_")
                 st.code("\n".join(errores_en))

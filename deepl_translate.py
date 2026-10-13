@@ -28,24 +28,42 @@ import requests
 _API_KEY = None
 _CACHE = {}  # (texto, source_lang, target_lang) -> traducción
 
+# _LAST_ERROR: motivo de la ÚLTIMA llamada fallida a la API (p.ej. key inválida, cuota agotada,
+# problema de red). Antes translate_es_en() tragaba CUALQUIER excepción en silencio y devolvía
+# None sin dejar rastro, así que si la key estaba mal escrita o la cuenta no estaba activada, el
+# único síntoma visible para Melissa era "SPANISH — DeepL not configured" en el inglés generado —
+# el MISMO mensaje que cuando nunca se configuró ninguna key, lo que la llevó a pensar que su key
+# no se había guardado bien cuando en realidad el problema era otro (cuenta no verificada, cuota
+# agotada, etc.). Con esto, assemble_en.py puede mostrar el motivo real en el log de generación.
+_LAST_ERROR = None
+
 
 def configure_deepl(api_key):
     """Guarda la API key para esta corrida de generación (ver app.py, que la lee de
     st.secrets['DEEPL_API_KEY'] y llama a esto antes de generar el Word en inglés).
     api_key=None o '' desactiva la traducción dinámica (comportamiento por defecto)."""
-    global _API_KEY
+    global _API_KEY, _LAST_ERROR
     _API_KEY = (api_key or '').strip() or None
     _CACHE.clear()
+    _LAST_ERROR = None
 
 
 def is_configured():
     return _API_KEY is not None
 
 
+def get_last_error():
+    """Motivo de la última llamada fallida a la API en esta corrida (None si no ha fallado
+    ninguna, o si DeepL nunca estuvo configurado). Ver nota de _LAST_ERROR arriba."""
+    return _LAST_ERROR
+
+
 def translate_es_en(text, source_lang='ES', target_lang='EN-US'):
     """Traduce texto libre de español a inglés vía la API de DeepL. Devuelve None (nunca lanza
     excepción) si no hay api_key configurada o si la llamada falla por cualquier motivo — quien
-    llama debe seguir funcionando sin traducción dinámica en ese caso."""
+    llama debe seguir funcionando sin traducción dinámica en ese caso. El motivo de una falla
+    queda disponible vía get_last_error() para mostrarlo en el log (ver assemble_en.py)."""
+    global _LAST_ERROR
     if text is None:
         return None
     text = text.strip()
@@ -70,9 +88,25 @@ def translate_es_en(text, source_lang='ES', target_lang='EN-US'):
             },
             timeout=15,
         )
+        if resp.status_code == 403:
+            _LAST_ERROR = 'API key inválida o no autorizada (error 403 de DeepL)'
+            return None
+        if resp.status_code == 456:
+            _LAST_ERROR = 'Se agotó la cuota de caracteres de la cuenta DeepL (error 456)'
+            return None
+        if resp.status_code == 429:
+            _LAST_ERROR = 'Demasiadas solicitudes a DeepL a la vez (error 429) — reintentar más tarde'
+            return None
         resp.raise_for_status()
         translated = resp.json()['translations'][0]['text']
         _CACHE[cache_key] = translated
         return translated
-    except Exception:
+    except requests.exceptions.Timeout:
+        _LAST_ERROR = 'Tiempo de espera agotado contactando a DeepL (posible problema de red)'
+        return None
+    except requests.exceptions.ConnectionError:
+        _LAST_ERROR = 'No se pudo conectar con DeepL (posible problema de red o firewall)'
+        return None
+    except Exception as e:
+        _LAST_ERROR = f'Error inesperado llamando a DeepL: {e}'
         return None

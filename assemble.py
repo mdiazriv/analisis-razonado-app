@@ -787,7 +787,13 @@ def collect_and_render_tables(wb, word_path, log, doc=None):
             image_map[a] = rendered[tkey]; continue
         out_png = os.path.join(img_dir, f'{tkey}.png')
         try:
-            RT.render_table(wb, spec, out_png, dpi=300, usable_width_in=usable_width_in)
+            # label_overrides_es: a diferencia de TABLES_EN (traducciones completas para la versión en
+            # inglés), esto es para unas pocas celdas puntuales de la versión en ESPAÑOL que necesitan
+            # un texto más corto que el de la celda del Excel (ej. 'Pesos chilenos' -> 'CLP' en el
+            # encabezado de Exposición en Monedas, ver TABLES['ExposicTC_tabla']) — el texto del Excel
+            # sigue siendo la fuente de verdad en todos los demás lugares del documento.
+            RT.render_table(wb, spec, out_png, dpi=300, usable_width_in=usable_width_in,
+                             label_overrides=spec.get('label_overrides_es'))
             image_map[a] = out_png; rendered[tkey] = out_png
             log.append(f"[OK] Tabla renderizada: {tkey}")
         except Exception as ex:

@@ -614,18 +614,40 @@ TABLES = {
     # 23=Total Pasivos, 24=Exposicion Neta
     bold_rows={2,10,11,23,24}, total_rows={10,23,24}, header_rows={0,1},
     center_cols=set(range(1,9)),
-    # Columna de etiquetas más ancha todavía (0.36, antes 0.28): Melissa pidió explícitamente que
-    # la columna de la cuenta sea más ancha para que el texto quepa completo y la tabla no quede
-    # tan extensa hacia abajo. Las 8 columnas de moneda bajan de 0.09 a 0.08 para compensar (siguen
-    # entrando números de hasta 9-10 caracteres como "(104.315)" sin problema). dynamic_row_height:
-    # antes TODAS las filas usaban el mismo alto fijo (row_h=0.42) pensado para la etiqueta más
-    # larga en 3 líneas, así que la tabla entera salía muy alta aunque casi todas las cuentas sean
-    # cortas (1 línea) — con esto cada fila mide solo lo que su propia etiqueta necesita (igual que
-    # se hizo antes para 'Riesgos'), y con col0 más ancha la mayoría de las etiquetas ya entran en
-    # 1-2 líneas en vez de 2-3, lo que además reduce el alto total de la tabla.
-    col_widths=[0.36,0.08,0.08,0.08,0.08,0.08,0.08,0.08,0.08],
-    fig_w=9.5, font_size=8.0, row_h=0.42, max_lines=3,
+    # Columna de etiquetas más ancha (0.30, antes 0.28) para que el texto de la cuenta quepa
+    # completo. Antes se había ensanchado a 0.36 a costa de las 8 columnas de moneda (a 0.08 cada
+    # una), pero eso dejó las columnas de moneda DEMASIADO angostas: los números en negrita de las
+    # filas de total ("Total Activos/Pasivos Financieros", "Exposición Neta") son hasta de 9
+    # caracteres con paréntesis y punto de miles (ej. "(191.056)"), y a ese ancho se montaban sobre
+    # la columna vecina (reportado por Melissa con capturas de pantalla). Con 0.30/0.0875 cada
+    # columna de moneda gana ~9% de ancho real, que es lo que hacía falta para esos números.
+    # label_overrides_es (ver assemble.collect_and_render_tables): los encabezados de moneda del
+    # Excel ("Pesos chilenos", "Sol Peruano", "Pesos Mexicano", "Rupia India", ...) son demasiado
+    # largos para una columna angosta — ya envueltos en 2 líneas, la segunda palabra sola ("Peruano",
+    # "Mexicano") seguía sin caber y se montaba sobre la columna vecina. Se acortan a sus códigos de
+    # moneda de 3 letras (CLP, PEN, MXN, etc.), que entran en una sola línea sin ambigüedad.
+    # col_widths / font_size: el texto ahora se dibuja alineado a la izquierda (ver más abajo) y
+    # SIN recorte por columna (solo se recorta al borde de toda la tabla), así que si una celda
+    # renderiza más ancha que su columna, se monta visualmente sobre la columna vecina. Medido con
+    # matplotlib (ancho REAL renderizado, misma fuente/peso/familia que usa esta función —
+    # fontfamily='serif', bold, al tamaño ya compensado por page_factor — no una estimación): el
+    # número en negrita más ancho de esta tabla, "(191.056)"/"(125.749)" (9 caracteres, paréntesis +
+    # punto de miles, filas de total), necesitaba 0.94in a font_size=8.0, más de lo que cabía en
+    # cualquier reparto de columnas que a la vez dejara espacio para la columna 0 (nombre de
+    # cuenta, hasta 59 caracteres: "Deudores comerciales y otras cuentas por cobrar, corrientes").
+    # Bajar font_size de 8.0 a 7.0 reduce ese ancho a 0.82in (el ancho de columna de moneda, el
+    # alto de fila y el "wrap" de la columna 0 dependen de page_factor, no de font_size, así que
+    # esto SOLO achica el texto, no descuadra el resto). Con columnas de moneda a 0.10 (0.10*9.5=
+    # 0.95in, menos ~0.07in de margen izquierdo = ~0.88in disponibles) el número más ancho entra con
+    # margen, y la columna 0 queda en 0.20 (antes 0.30/0.24), suficiente para el nombre de cuenta
+    # más largo envuelto en hasta 6 líneas (max_lines sube de 3 a 6 — ver nota en wrap_label: antes
+    # recortaba en silencio cualquier línea de más, perdiendo texto real sin aviso). Todo esto
+    # verificado renderizando y midiendo cada valor real de ExposicTC (ES y EN), no solo el peor caso.
+    col_widths=[0.20,0.10,0.10,0.10,0.10,0.10,0.10,0.10,0.10],
+    fig_w=9.5, font_size=7.0, row_h=0.42, max_lines=6,
     dynamic_row_height=True,
+    label_overrides_es={(0, 1): 'CLP', (0, 2): 'PEN', (0, 3): 'EUR', (0, 4): 'MXN',
+                         (0, 5): 'CNY', (0, 6): 'MAD', (0, 7): 'INR', (0, 8): 'Otras'},
  ),
 
  'EfectoTC': dict(
@@ -699,12 +721,19 @@ TABLES = {
     dynamic_translate_cols={1,2,3},
  ),
 
+ # wrap_all_cols/dynamic_row_height: la columna "TIPO DE SEGURO" (ci=1) tiene textos largos
+ # ("Responsabilidad Civil General y de Productos") que, sin wrap_all_cols, no se envolvían y se
+ # montaban sobre la columna de MONEDA vecina; y el encabezado de 2 filas ("MONTO CUBIERTO" +
+ # la fecha) se montaba verticalmente porque el alto de fila era fijo, pensado para una sola línea
+ # (reportado por Melissa con capturas de pantalla). Con esto cada columna envuelve su texto y cada
+ # fila mide lo que su contenido necesita, igual que ya se hizo para 'Riesgos' y 'ExposicTC_tabla'.
  'Seguros': dict(
     sheet='Seguros',
     cols=[(3,'str'),(4,'str'),(5,'str'),(6,'num'),(7,'num')],
     rows=list(range(3,43)),
     bold_rows={0,1}, total_rows=set(), header_rows={0,1}, center_cols={2,3,4},
-    col_widths=[0.10,0.35,0.08,0.235,0.235],
+    col_widths=[0.12,0.32,0.11,0.225,0.225],
+    wrap_all_cols=True, max_lines=3, dynamic_row_height=True,
  ),
 
  'FVfruta': dict(
@@ -861,15 +890,16 @@ TABLES_EN = {'EBITDA': {'group_headers': [(0, 1, 2, 'CALENDAR YEAR\n(6 months)')
                                     (6, 0): 'Operating Lease Liabilities',
                                     (7, 0): 'Trade accounts\nand other payables',
                                     (8, 0): 'Accounts payable to\nrelated companies'}},
- # Sin saltos de línea manuales: con col0 más ancha (ver TABLES['ExposicTC_tabla'] arriba) y
- # max_lines=3, wrap_label ya envuelve estas etiquetas completas sin cortar texto.
- 'ExposicTC_tabla': {'label_overrides': {(0, 1): 'Chilean Pesos',
-                                         (0, 2): 'Peruvian Sol',
-                                         (0, 3): 'Euro',
-                                         (0, 4): 'Mexican Pesos',
-                                         (0, 5): 'Yuan',
-                                         (0, 6): 'Dirham',
-                                         (0, 7): 'Indian Rupee',
+ # Códigos de moneda de 3 letras en vez del nombre completo (igual que label_overrides_es en
+ # TABLES['ExposicTC_tabla']): con 8 columnas de moneda tan angostas, nombres como "Mexican Pesos"
+ # o "Indian Rupee" no entran ni envueltos en 2 líneas sin montarse sobre la columna vecina.
+ 'ExposicTC_tabla': {'label_overrides': {(0, 1): 'CLP',
+                                         (0, 2): 'PEN',
+                                         (0, 3): 'EUR',
+                                         (0, 4): 'MXN',
+                                         (0, 5): 'CNY',
+                                         (0, 6): 'MAD',
+                                         (0, 7): 'INR',
                                          (0, 8): 'Other',
                                          (2, 0): 'Financial Assets',
                                          (3, 0): 'Cash and Cash Equivalents',
