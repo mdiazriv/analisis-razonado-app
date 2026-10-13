@@ -13,11 +13,35 @@ en algunos párrafos redacta distinto al motor (ver nota en cada función de bri
 from decimal import Decimal, ROUND_HALF_UP
 
 CAUSA_TAG_EN = "CAUSE NOT DERIVABLE FROM EXCEL: update if applicable."
+# Aviso que acompaña una causa tomada del Word en ESPAÑOL ya editado este trimestre (ver
+# assemble.collect_causes_by_highlight / assemble_en.generate_en, parámetro word_es_edited_path):
+# en ese caso el texto resaltado viene tal cual lo escribió la persona en español (fiel reflejo de su
+# edición), y falta traducirlo — no se traduce automáticamente para no mandar el texto a un servicio
+# externo ni arriesgar una mala traducción de un término financiero específico.
+TRANSLATE_TAG_EN = "SPANISH — TRANSLATE INTO ENGLISH:"
+
+def _cause_bracket(cause):
+    """Devuelve el texto a resaltar en amarillo para una causa de negocio, o None si no hay nada que
+    agregar. `cause` puede ser:
+      - un string: causa ya en inglés (heredada del Word en inglés del trimestre anterior).
+      - una tupla (texto_en_español, True): causa tomada del Word en español ya editado este
+        trimestre — todavía en español, pendiente de que la persona la traduzca. No se traduce
+        automáticamente (ni con un servicio externo ni con un modelo local): queda en español,
+        resaltada, para que la persona la traduzca ella misma."""
+    if isinstance(cause, tuple):
+        cause_text, needs_translation = cause[0], cause[1]
+        if needs_translation and cause_text:
+            return f"{TRANSLATE_TAG_EN} {cause_text}"
+        cause = cause_text
+    if cause:
+        return f"{cause} ({CAUSA_TAG_EN})"
+    return None
 
 def _with_cause(base_text, cause):
     text = base_text[:-1] if base_text.endswith('.') else base_text
-    if cause:
-        return text + f", [[{cause} ({CAUSA_TAG_EN})]]"
+    bracket = _cause_bracket(cause)
+    if bracket is not None:
+        return text + f", [[{bracket}]]"
     return text + f", [[{CAUSA_TAG_EN}]]"
 
 def c(wb, sheet, ref):
@@ -241,8 +265,9 @@ def bridge_factor_text(label, cur, prior, delta, period='6m', cause=None):
         f"{lead} US${fmt_millones(cur)} million {cur_lbl}, compared with "
         f"US${fmt_millones(prior)} million {prior_lbl} ({sign_str(delta)}US${fmt_millones(delta)} million)."
     )
-    if cause:
-        base = base[:-1] + f", [[{cause} ({CAUSA_TAG_EN})]]."
+    bracket = _cause_bracket(cause)
+    if bracket is not None:
+        base = base[:-1] + f", [[{bracket}]]."
     return base
 
 def p_ganancia_controladora_12m(wb):

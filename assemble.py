@@ -287,6 +287,149 @@ def collect_original_causes(doc, log):
             log.append(f"[OK] Causas originales preservadas en bridge 12M: {', '.join(causes['bridge_12m'].keys())}")
     return causes
 
+# ---------- Extracción de causas desde el resaltado amarillo (Word en español YA EDITADO) ----------
+# A diferencia de collect_original_causes() (que reconstruye la causa con regex sobre texto libre,
+# pensado para "adivinar" la frase en un Word externo de un trimestre cualquiera), esta función lee
+# directamente los RUNS resaltados en amarillo del Word en español que la propia app generó y que la
+# persona responsable ya revisó/editó este mismo trimestre. Como el resaltado lo puso la propia app
+# (set_paragraph_text, vía el marcador [[...]]), tomar el texto de esos runs tal cual venga agarra
+# CUALQUIER cosa que la persona haya escrito ahí — la causa original sin cambios, una causa reescrita,
+# o texto adicional que haya agregado — sin depender de que calce un patrón de redacción específico.
+# Se usa para traspasar esa(s) frase(s) al Word en inglés (ver assemble_en.generate_en), dejándolas en
+# español y marcadas para traducir, en vez de generar una traducción automática.
+def _highlighted_segments(para):
+    """Tramos de texto contiguos resaltados en amarillo dentro de un párrafo, en el orden en que
+    aparecen. Dentro de un mismo tramo pueden venir varios runs (Word a veces separa el texto en más
+    de un run al guardar una edición manual), por eso se van concatenando mientras sigan resaltados."""
+    segs = []
+    buf = []
+    for run in para.runs:
+        if run.font.highlight_color == WD_COLOR_INDEX.YELLOW and run.text:
+            buf.append(run.text)
+        else:
+            if buf:
+                segs.append(''.join(buf)); buf = []
+    if buf:
+        segs.append(''.join(buf))
+    return segs
+
+def _strip_cause_tag(seg, tag):
+    """Quita el aviso fijo (CAUSA_TAG) de un tramo resaltado, quede donde quede dentro del tramo, y
+    deja solo lo que escribió la persona. Si no queda nada (el tramo era solo el aviso, sin causa
+    propia), devuelve None."""
+    if not seg:
+        return None
+    t = re.sub(r'\(\s*' + re.escape(tag) + r'\s*\)', '', seg)
+    t = t.replace(tag, '')
+    t = t.strip().strip(',').strip()
+    return t or None
+
+def _strip_cause_marks(template_text):
+    """Dado el texto CRUDO que devuelve una función de plantilla (con los marcadores [[...]] / {{...}}
+    todavía sin procesar), devuelve el texto 'plano' equivalente a lo que quedaría en el párrafo si
+    nadie tocara nada: quita los tramos [[...]] (la causa resaltada) por completo, y deja el contenido
+    de los tramos {{...}} (negrita) como texto normal, igual que haría set_paragraph_text pero sin el
+    resaltado/negrita en sí. Sirve para comparar, más abajo, contra el texto REAL de un párrafo ya
+    editado y detectar si la persona cambió algo más allá de la causa resaltada."""
+    return MARK_RE.sub(lambda m: '' if m.group(1) is not None else m.group(2), template_text)
+
+def _normspace(s):
+    return re.sub(r'\s+', ' ', s or '').strip()
+
+def _non_highlighted_text(para):
+    """Texto de un párrafo excluyendo cualquier tramo resaltado en amarillo — el equivalente, en el
+    documento real, al texto 'plano' que produce _strip_cause_marks() sobre la plantilla."""
+    return ''.join(run.text for run in para.runs if run.font.highlight_color != WD_COLOR_INDEX.YELLOW)
+
+def _check_paragraph_matches_excel(doc, wb, periods, anchor, fn, label, log):
+    """Verifica que la parte NO resaltada de un párrafo cubierto (todo lo que no es la causa de
+    negocio) siga siendo exactamente la que generaría el motor a partir del Excel de este trimestre.
+    Si no calza, es porque la persona editó algo a mano más allá de la causa resaltada (una cifra, una
+    palabra, lo que sea) — eso no se puede traspasar solo (arriesgaría insertar un fragmento mal
+    cortado en un documento financiero formal), así que se deja un aviso explícito para revisión
+    manual en vez de fallar en silencio."""
+    _, para = find_paragraph(doc, anchor)
+    if para is None:
+        return
+    try:
+        auto_raw = P.localize(_call_single_template(fn, wb, {}), periods)
+    except Exception:
+        return
+    auto_plain = _normspace(_strip_cause_marks(auto_raw))
+    actual_plain = _normspace(_non_highlighted_text(para))
+    if auto_plain != actual_plain:
+        log.append(
+            f"[AVISO] El párrafo '{label}' del Word en español tiene cambios a mano fuera de la "
+            "causa resaltada en amarillo (una cifra, una palabra u otro ajuste) — revisa a mano que "
+            "el Word en inglés diga lo mismo ahí, porque esta app no traspasa ese tipo de edición "
+            "automáticamente."
+        )
+
+def collect_causes_by_highlight(doc, wb, periods, log):
+    """Extrae, de un Word en español ya generado por esta app (y potencialmente editado a mano), las
+    frases resaltadas en amarillo de los párrafos cubiertos por SINGLE_TEMPLATES y del bridge de
+    Ganancia Atribuible 12M — usando el mismo esquema de llaves que collect_original_causes(), para
+    que assemble_en.py pueda combinarlas sin cambios adicionales. Además, para CADA párrafo de
+    SINGLE_TEMPLATES (tenga o no causa), compara su parte no resaltada contra lo que el motor generaría
+    de nuevo a partir del Excel, y deja un [AVISO] si no calzan — ver _check_paragraph_matches_excel."""
+    causes = {}
+    anchor_by_fn = {fn: anchor for anchor, fn in SINGLE_TEMPLATES}
+
+    for anchor, fn in SINGLE_TEMPLATES:
+        _check_paragraph_matches_excel(doc, wb, periods, anchor, fn, anchor[:50], log)
+
+    def _segs_for(fn):
+        anchor = anchor_by_fn.get(fn)
+        if not anchor:
+            return []
+        _, para = find_paragraph(doc, anchor)
+        return _highlighted_segments(para) if para is not None else []
+
+    segs = _segs_for(E.p_deterioro_6m)
+    cur = _strip_cause_tag(segs[0], E.CAUSA_TAG) if len(segs) > 0 else None
+    prior = _strip_cause_tag(segs[1], E.CAUSA_TAG) if len(segs) > 1 else None
+    if cur: causes['deterioro_6m_cur'] = cur
+    if prior: causes['deterioro_6m_prior'] = prior
+    if cur or prior:
+        log.append("[OK] Causa tomada del Word en español editado: deterioro de activos 6M")
+
+    for fn, key, label in [
+        (E.p_gastosadmin_6m, 'gastosadmin_6m', 'gastos de administración 6M'),
+        (E.p_costoventa_12m, 'costoventa_12m', 'costo de ventas 12M'),
+        (E.p_razon_endeudamiento, 'razon_endeudamiento', 'razón de endeudamiento'),
+        (E.p_cobertura_gf, 'cobertura_gf', 'cobertura de gastos financieros'),
+    ]:
+        segs = _segs_for(fn)
+        cause = _strip_cause_tag(segs[0], E.CAUSA_TAG) if segs else None
+        if cause:
+            causes[key] = cause
+            log.append(f"[OK] Causa tomada del Word en español editado: {label}")
+
+    # --- Bridge 12M (Ganancia Atribuible) ---
+    causes['bridge_12m'] = {}
+    idx, intro = find_paragraph(doc, r"^La (ganancia|pérdida)(\s*\(pérdida\))? atribuible a los propietarios de la controladora (fue de|se registr[oó] en) US\$")
+    if intro is not None:
+        pos_paras, after_pos = _next_list_block(doc, idx + 1, 14)
+        j = after_pos
+        n = len(doc.paragraphs)
+        while j < n and doc.paragraphs[j].text.strip() == '':
+            j += 1
+        sep_idx = j if (j < n and 'compensad' in doc.paragraphs[j].text.lower()) else None
+        neg_paras = []
+        if sep_idx is not None:
+            neg_paras, _ = _next_list_block(doc, sep_idx + 1, 14)
+        for p in (pos_paras + neg_paras):
+            label = classify_bridge_label(p.text)
+            if not label:
+                continue
+            segs = _highlighted_segments(p)
+            cause = _strip_cause_tag(segs[0], E.CAUSA_TAG) if segs else None
+            if cause:
+                causes['bridge_12m'][label] = cause
+        if causes['bridge_12m']:
+            log.append(f"[OK] Causas tomadas del Word en español editado (bridge 12M): {', '.join(causes['bridge_12m'].keys())}")
+    return causes
+
 # Funciones de SINGLE_TEMPLATES que necesitan una causa de negocio original (ver collect_original_causes).
 # El resto se llama simplemente como fn(wb).
 def _call_single_template(fn, wb, causes):

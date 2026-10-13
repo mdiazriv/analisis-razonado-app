@@ -22,6 +22,7 @@ import openpyxl
 sys.path.insert(0, os.path.dirname(__file__))
 import ar_engine_en as E
 import periods_en as P
+import assemble as ASM_ES  # motor en español: se reutiliza collect_causes_by_highlight (ver generate_en)
 
 MARK_RE = re.compile(r'\[\[([^\]]+)\]\]|\{\{([^}]+)\}\}')
 
@@ -557,7 +558,52 @@ def collect_and_render_tables_en(wb, word_path, log):
             log.append(f"[ERROR] (EN) Tabla {tkey}: {ex}")
     return image_map, img_dir
 
-def generate_en(excel_path, word_path, out_path):
+# Llaves de `causes` que corresponden a una sola frase de causa (ver _call_single_template);
+# 'bridge_12m' se maneja aparte porque es un diccionario anidado por label.
+_SINGLE_CAUSE_KEYS = [
+    'deterioro_6m_cur', 'deterioro_6m_prior', 'gastosadmin_6m',
+    'costoventa_12m', 'razon_endeudamiento', 'cobertura_gf',
+]
+
+def _merge_causes_from_edited_es(causes, wb, word_es_edited_path, log):
+    """Si se subió el Word en ESPAÑOL ya generado/editado este trimestre, extrae (por resaltado
+    amarillo, ver assemble.collect_causes_by_highlight) sus causas de negocio y las usa en vez de las
+    que traía el Word en inglés base (que son del trimestre ANTERIOR). Quedan marcadas con una tupla
+    (texto_en_español, True) para que ar_engine_en._with_cause las deje en español, resaltadas, con el
+    aviso de traducir — nunca se traducen automáticamente (ni con un servicio externo ni con un modelo
+    local): es la persona quien las traduce. De paso, collect_causes_by_highlight deja en el log un
+    [AVISO] por cada párrafo donde la persona haya editado a mano algo más allá de la causa resaltada
+    (una cifra, una palabra), para que se revise manualmente que el inglés diga lo mismo ahí — ver
+    docstring de esa función."""
+    try:
+        doc_es = docx.Document(word_es_edited_path)
+    except Exception as ex:
+        log.append(f"[AVISO] (EN) No pude abrir el Word en español editado para extraer causas: {ex}")
+        return
+    periods_es = ASM_ES.P.derive_periods(wb)
+    causes_es = ASM_ES.collect_causes_by_highlight(doc_es, wb, periods_es, log)
+    used_any = False
+    for key in _SINGLE_CAUSE_KEYS:
+        val = causes_es.get(key)
+        if val:
+            causes[key] = (val, True)
+            used_any = True
+    for label, val in causes_es.get('bridge_12m', {}).items():
+        if val:
+            causes.setdefault('bridge_12m', {})[label] = (val, True)
+            used_any = True
+    if used_any:
+        log.append(
+            "[OK] (EN) Se tomaron las causas de negocio del Word en español editado este trimestre "
+            "(quedan en español, resaltadas, con aviso de traducir)"
+        )
+    else:
+        log.append(
+            "[AVISO] (EN) No encontré causas resaltadas en el Word en español que subiste; se "
+            "mantienen las del Word en inglés base (si había) o solo el aviso genérico"
+        )
+
+def generate_en(excel_path, word_path, out_path, word_es_edited_path=None):
     log = []
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     periods = P.derive_periods_en(wb)
@@ -569,6 +615,8 @@ def generate_en(excel_path, word_path, out_path):
     old_periods = P.derive_old_periods_from_title_en(_title_para.text) if _title_para is not None else None
 
     causes = collect_original_causes(doc, log)
+    if word_es_edited_path:
+        _merge_causes_from_edited_es(causes, wb, word_es_edited_path, log)
     apply_header_templates(doc, periods, log)
     apply_single_templates(doc, wb, periods, causes, log)
     apply_bridge_bullets(doc, wb, periods, causes, log)
