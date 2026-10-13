@@ -103,8 +103,33 @@ def fmt_en(v, style='num'):
     return f'({formatted})' if n < 0 else formatted
 
 # ── Word wrap ──
-def wrap_label(text, max_chars, max_lines=2):
-    """Wrap at word boundaries."""
+def _justify_lines(lines, width_chars):
+    """Aproxima texto justificado (ambos márgenes parejos) repartiendo espacio extra entre
+    palabras: no es tipografía real (la fuente no es monoespaciada), pero da un efecto visual de
+    bloque justificado razonable para tablas renderizadas como imagen. La última línea de cada
+    celda (y cualquier línea de una sola palabra) se deja alineada a la izquierda, como en
+    cualquier texto justificado normal."""
+    out = []
+    for i, line in enumerate(lines):
+        words = line.split()
+        if i == len(lines) - 1 or len(words) <= 1:
+            out.append(line)
+            continue
+        total_chars = sum(len(w) for w in words)
+        gaps = len(words) - 1
+        spaces_needed = max(width_chars - total_chars, gaps)
+        base, extra = divmod(spaces_needed, gaps)
+        parts = []
+        for j, w in enumerate(words[:-1]):
+            parts.append(w)
+            parts.append(' ' * (base + (1 if j < extra else 0)))
+        parts.append(words[-1])
+        out.append(''.join(parts))
+    return out
+
+def wrap_label(text, max_chars, max_lines=2, justify=False):
+    """Wrap at word boundaries. justify=True: reparte espacio extra en las líneas que no son la
+    última para aproximar un bloque de texto justificado (ver _justify_lines)."""
     if not text or len(text) <= max_chars: return text
     words = text.split()
     lines, cur = [], ''
@@ -114,7 +139,25 @@ def wrap_label(text, max_chars, max_lines=2):
         else:
             cur = (cur+' '+w).strip()
     if cur: lines.append(cur)
-    return '\n'.join(lines[:max_lines])
+    lines = lines[:max_lines]
+    if justify:
+        lines = _justify_lines(lines, max_chars)
+    return '\n'.join(lines)
+
+def usable_width_inches(doc):
+    """Ancho útil de página (ancho de página menos márgenes izq/der) en pulgadas, a partir de un
+    docx.Document ya abierto. Se usa para compensar el achicamiento que aplica Word cuando la
+    imagen de una tabla es más ancha que ese ancho útil (ver fix_image_frame_sizes en assemble.py
+    y el parámetro usable_width_in de render_table): Word escala la imagen completa (incluida la
+    letra) para que quepa en la página, así que una tabla renderizada mucho más ancha que la
+    página termina viéndose con letra diminuta aunque el PNG tenga resolución alta. Devuelve None
+    si no se puede determinar (para no romper nada en ese caso: simplemente no se compensa)."""
+    try:
+        sec = doc.sections[0]
+        emu = sec.page_width - sec.left_margin - sec.right_margin
+        return emu / 914400.0
+    except Exception:
+        return None
 
 def resolve_row_nums(ws, spec):
     """Devuelve la lista de filas reales de la hoja para spec['rows'], aplicando el ajuste de
@@ -150,17 +193,25 @@ def resolve_row_nums(ws, spec):
     return row_nums
 
 # ── Core renderer ──
-def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None):
+def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None, usable_width_in=None):
     """lang='en': usa formato numérico en-US (fmt_en) en vez de es-CL (fmt). label_overrides:
     {(row_idx, col_idx): 'texto'} para reemplazar el texto de una celda (misma fila/columna lógicas
     que label_shorten, pero por (fila,columna) en vez de solo fila 0) — usado para las tablas en
-    inglés, que leen el MISMO Excel en español pero muestran las etiquetas ya traducidas."""
+    inglés, que leen el MISMO Excel en español pero muestran las etiquetas ya traducidas.
+
+    usable_width_in: ancho útil de la página (en pulgadas) del Word destino (ver
+    usable_width_inches arriba). Si la tabla se renderiza más ancha que esto (spec['fig_w'] >
+    usable_width_in), Word la va a achicar completa (letra incluida) para que quepa en la página —
+    así que acá se agranda la letra y el alto de fila en la misma proporción de antemano, para que
+    el tamaño final, YA achicado por Word, quede como se diseñó (en vez de verse diminuto). No
+    cambia el ancho/alto de las columnas (eso seguiría dependiendo de fig_w, para no reintroducir
+    el corte de etiquetas largas que motivó usar un fig_w ancho en primer lugar), solo compensa la
+    letra y el alto de fila."""
     label_overrides = label_overrides or {}
     _fmt = fmt_en if lang == 'en' else fmt
     ws = wb[spec['sheet']]
     row_nums = resolve_row_nums(ws, spec)
     col_defs   = spec['cols']
-    n_rows     = len(row_nums)
     cw         = spec['col_widths']
     bold_rows  = spec.get('bold_rows', set())
     italic_rows= spec.get('italic_rows', set())
@@ -172,21 +223,101 @@ def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None):
     grp_headers= spec.get('group_headers', [])
     italic_col0_only = spec.get('italic_col0_only', False)
     label_shorten= spec.get('label_shorten', {})   # {row_idx: 'short text'}
+    justify_cols = spec.get('justify_cols', set())
+    pct_rows = spec.get('pct_rows', set())
 
     FIG_W = spec.get('fig_w', 8.2)
-    ROW_H_BASE = spec.get('row_h', 0.285)
-    FONT = spec.get('font_size', 9.0)
-    FONT_HDR = FONT - 0.5
-    FONT_SM  = FONT - 1.5
-    FONT_XS  = FONT - 2.5
-    MARGIN = 0.06
-    FN_H = 0.22 if spec.get('footnote') else 0
-    max_lines_spec = spec.get('max_lines', 2)
-    wrap_all = spec.get('wrap_all_cols', False)
 
-    # Fixed row heights — same for all rows in the table
-    # ROW_H_BASE is set large enough (0.28") to accommodate 2-line wraps at 9pt
-    row_heights = [ROW_H_BASE] * n_rows
+    # Compensación de achicamiento de página (ver docstring arriba): si esta tabla se va a insertar
+    # más ancha que la página, se agranda letra y alto de fila en la misma proporción para que,
+    # tras el achicamiento de Word, el tamaño quede como se diseñó.
+    page_factor = 1.0
+    if usable_width_in and usable_width_in > 0 and FIG_W > usable_width_in:
+        page_factor = FIG_W / usable_width_in
+
+    ROW_H_BASE = spec.get('row_h', 0.285) * page_factor
+    FONT = spec.get('font_size', 9.0) * page_factor
+    FONT_HDR = FONT - 0.5
+    MARGIN = 0.06
+    FN_H = (0.22 * page_factor) if spec.get('footnote') else 0
+    FOOTNOTE_FONT = spec.get('footnote_font_size', 6.5) * page_factor
+    max_lines_spec = spec.get('max_lines', 2)
+    dynamic_row_height = spec.get('dynamic_row_height', False)
+    skip_empty_rows = spec.get('skip_empty_rows', False)
+
+    # skip_empty_rows: descarta filas de datos (no de encabezado) sin ningún valor en ninguna
+    # columna — para tablas cuya hoja de Excel reserva más filas de las que este trimestre tiene
+    # contenido (ej. 'Riesgos': la plantilla deja espacio para varios riesgos críticos pero puede
+    # haber menos este trimestre), así la imagen no queda con filas en blanco ocupando espacio.
+    if skip_empty_rows:
+        max_header_ri = max(header_rows) if header_rows else -1
+        kept = list(range(len(row_nums)))
+        while kept and kept[-1] > max_header_ri:
+            rn = row_nums[kept[-1]]
+            if any(ws.cell(rn, ec).value not in (None, '') for ec, _ in col_defs):
+                break
+            kept.pop()
+        row_nums = [row_nums[i] for i in kept]
+
+    n_rows = len(row_nums)
+
+    # ---- Paso 1: resolver el texto final de cada celda (valor + overrides + wrap/justify) y, de
+    # paso, cuántas líneas necesita cada fila — para las tablas con dynamic_row_height, el alto de
+    # fila sale de esto en vez de ser fijo (ver más abajo), y así no queda espacio en blanco de
+    # sobra cuando el texto real es corto.
+    cell_text = {}
+    row_lines = [1] * n_rows
+    for ri, rn in enumerate(row_nums):
+        is_italic = ri in italic_rows
+        is_header = ri in header_rows
+        for ci, (ec, bstyle) in enumerate(col_defs):
+            if is_italic and italic_col0_only and ci > 0:
+                continue
+            if any(g[0] == ri and g[1] <= ci <= g[2] for g in grp_headers):
+                continue
+
+            val = ws.cell(rn, ec).value
+            style = bstyle
+            if style == '_auto' and ci in (2, 3): style = row_fmt_map.get(ri, 'dec2')
+            if ri in pct_rows and ci > 0 and style == 'num': style = spec.get('pct_style', 'auto_pct')
+
+            if val is None or val == '': txt = ''
+            elif isinstance(val, str):
+                txt = val.strip()
+                if lang == 'en': txt = _translate_common_strings_en(txt)
+            elif isinstance(val, datetime): txt = val.strftime('%d-%b-%y')
+            elif isinstance(val, bool): txt = ''
+            else: txt = _fmt(val, style)
+
+            if ci == 0 and ri in label_shorten: txt = label_shorten[ri]
+            if (ri, ci) in label_overrides: txt = label_overrides[(ri, ci)]
+
+            col_inch = cw[ci] * FIG_W
+            # El ancho en caracteres que entra en la columna depende de qué tan grande es la letra:
+            # si page_factor agrandó la fuente (ver más arriba) para compensar el achicamiento de
+            # Word, cada caracter ocupa más pulgadas, así que entran MENOS caracteres por línea en
+            # la misma columna (en pulgadas) — si no se divide por page_factor acá, el texto se sale
+            # de su columna y se monta sobre la siguiente (bug visto en 'Riesgos' al compensar).
+            max_chars = max(8, int(col_inch * 9.5 / page_factor))
+            max_lines = spec.get('max_lines', 2)
+            wraps_here = ci == 0 or is_header or (ci > 0 and spec.get('wrap_all_cols') and not (is_italic and italic_col0_only))
+            if wraps_here:
+                # No justificar encabezados: son frases cortas (ej. "Descripción del Riesgo") y
+                # forzarlas a ocupar todo el ancho de la columna se ve raro (palabras muy separadas).
+                txt = wrap_label(txt, max_chars, max_lines, justify=(ci in justify_cols and not is_header))
+
+            cell_text[(ri, ci)] = txt
+            if wraps_here:
+                row_lines[ri] = max(row_lines[ri], txt.count('\n') + 1)
+
+    # ---- Alto de fila: fijo (ROW_H_BASE) salvo que la tabla pida alto dinámico según contenido ----
+    if dynamic_row_height:
+        LINE_H_IN = (FONT / 72.0) * 1.35
+        CELL_PAD_IN = 0.09
+        MIN_ROW_H = 0.22 * page_factor
+        row_heights = [max(MIN_ROW_H, row_lines[ri] * LINE_H_IN + CELL_PAD_IN) for ri in range(n_rows)]
+    else:
+        row_heights = [ROW_H_BASE] * n_rows
 
     # group_gaps: cuando la lista de filas salta (sub-tablas no contiguas en la hoja, ej. Risks),
     # inserta un espacio visual extra antes del salto para que se vean como bloques separados.
@@ -198,7 +329,7 @@ def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None):
             if row_nums[ri] - row_nums[ri-1] > 1:
                 extra_gaps[ri] = GAP_H
 
-    FIG_H = n_rows * ROW_H_BASE + sum(extra_gaps) + 2*MARGIN + FN_H
+    FIG_H = sum(row_heights) + sum(extra_gaps) + 2*MARGIN + FN_H
 
     fig, ax = plt.subplots(figsize=(FIG_W, FIG_H))
     AX_H = FIG_H / FIG_W
@@ -210,7 +341,7 @@ def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None):
 
     BLACK=(0,0,0); YELLOW=(1.0,0.867,0.0); WHITE=(1.0,1.0,1.0)
 
-    # Y positions (constant spacing since all rows same height, plus any group gap)
+    # Y positions (alto de fila fijo o dinámico según la tabla, más cualquier group gap)
     row_y_tops = []
     y_cur = Y0
     for ri, rh in enumerate(row_heights):
@@ -237,37 +368,7 @@ def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None):
             # Skip group header covered cells
             if any(g[0]==ri and g[1]<=ci<=g[2] for g in grp_headers): continue
 
-            val = ws.cell(rn,ec).value
-            style = bstyle
-            if style=='_auto' and ci in (2,3): style=row_fmt_map.get(ri,'dec2')
-            # pct_rows: numeric cols in these rows show as percentages
-            pct_rows = spec.get('pct_rows',set())
-            if ri in pct_rows and ci>0 and style=='num': style=spec.get('pct_style','auto_pct')
-
-            if val is None or val=='': txt=''
-            elif isinstance(val,str):
-                txt=val.strip()
-                if lang=='en': txt=_translate_common_strings_en(txt)
-            elif isinstance(val,datetime): txt=val.strftime('%d-%b-%y')
-            elif isinstance(val,bool): txt=''
-            else: txt=_fmt(val,style)
-
-            # Apply label shortening if defined
-            if ci==0 and ri in label_shorten: txt=label_shorten[ri]
-            # Apply (row,col) label override if defined (English tables: translated label text)
-            if (ri,ci) in label_overrides: txt=label_overrides[(ri,ci)]
-
-            # Col 0: wrap to 2 lines max
-            # Numeric cols: NEVER truncate
-            col_inch = w * FIG_W
-            max_chars = max(8, int(col_inch * 9.5))
-            max_lines = spec.get('max_lines', 2)
-            if ci==0 or is_header:
-                txt = wrap_label(txt, max_chars, max_lines)
-            elif ci>0 and not (is_italic and italic_col0_only):
-                # For non-label cols in tables with max_lines>2, wrap text cols too
-                if spec.get('wrap_all_cols'):
-                    txt = wrap_label(txt, max_chars, max_lines)
+            txt = cell_text.get((ri, ci), '')
 
             # Alignment
             if ci in center_cols or (is_header and ci>0):
@@ -275,22 +376,16 @@ def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None):
             else:
                 ha,xp = 'left', x0+0.007
 
-            # Font size: shrink numeric cols that are tight
             fw = 'bold' if (is_bold or is_header) else 'normal'
             fs = 'italic' if is_italic else 'normal'  # bold+italic combinado es válido (ver 'Costos': fila Deterioro)
-            n_lines = txt.count('\n')+1
-            longest = max((len(l) for l in txt.split('\n')),default=0)
-
-            if is_header:
-                sz = FONT_HDR
-            else:
-                sz = FONT   # ALWAYS same size for all data rows
+            sz = FONT_HDR if is_header else FONT   # ALWAYS same size for all data rows
+            malign = 'left' if ci in justify_cols else 'center'
 
             ax.text(xp, yt-H*0.5, txt,
                     ha=ha, va='center', fontsize=sz,
                     fontweight=fw, fontstyle=fs,
                     color=BLACK, clip_on=True, zorder=3,
-                    fontfamily='serif', multialignment='center', linespacing=1.1)
+                    fontfamily='serif', multialignment=malign, linespacing=1.1)
 
         # Lines
         ax.plot([0,1],[yt-H,yt-H],color=(0.82,0.82,0.82),linewidth=0.25,zorder=2)
@@ -317,7 +412,7 @@ def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None):
 
     if spec.get('footnote'):
         ax.text(0,table_bottom-0.008,spec['footnote'],
-                ha='left',va='top',fontsize=6.5,
+                ha='left',va='top',fontsize=FOOTNOTE_FONT,
                 color=(0.3,0.3,0.3),fontstyle='italic',fontfamily='serif')
 
     plt.subplots_adjust(left=0,right=1,top=1,bottom=0)
@@ -536,15 +631,30 @@ TABLES = {
     fig_w=4.9, font_size=9.5, row_h=0.36,
  ),
 
- # Riesgos criticos: Tipo, Nombre, Descripcion, Controles (all text, need wrapping)
+ # Riesgos criticos: Tipo, Nombre, Descripcion, Controles (all text, need wrapping).
+ # dynamic_row_height: cada fila mide solo lo que su texto realmente necesita (antes el alto de
+ # fila era fijo en 2.0", así que una descripción corta dejaba mucho espacio en blanco y dos
+ # riesgos ya hacían ver la tabla enorme — avisado por Melissa como "ajustar al tamaño de la tabla
+ # / menos filas"). skip_empty_rows: si la hoja 'Riesgos' trae filas reservadas sin contenido este
+ # trimestre, no se dibujan (en vez de una fila en blanco ocupando espacio). justify_cols: texto
+ # justificado (ambos márgenes) en Descripción y Controles, a pedido explícito de Melissa — ver
+ # _justify_lines arriba (aproximado, no tipografía real, porque la fuente no es monoespaciada).
  'Riesgos': dict(
     sheet='Riesgos',
     cols=[(3,'str'),(4,'str'),(5,'str'),(6,'str')],
     rows=[2,3,4],
     bold_rows={0}, total_rows=set(), header_rows={0},
-    center_cols=set(), col_widths=[0.09,0.17,0.37,0.37],
-    fig_w=7.2, row_h=2.0, font_size=8.5,
+    # Tipo/Nombre son columnas de texto corto pero que no siempre tiene dónde cortar (una sola
+    # palabra larga, ej. "Operacional", "CIBERSEGURIDAD..."): wrap_label solo corta entre palabras,
+    # así que si la columna es más angosta que esa palabra el texto se monta sobre la columna
+    # vecina. 0.09/0.17 (los anchos originales) ya quedaban al límite con la letra base y se
+    # desbordaban al agrandar la letra para compensar el achicamiento de página (ver page_factor
+    # más arriba) — se ensanchan a costa de Descripción/Controles, que sí pueden partirse en varias
+    # líneas sin problema.
+    center_cols=set(), col_widths=[0.13,0.19,0.34,0.34],
+    fig_w=7.2, row_h=0.3, font_size=8.5,
     max_lines=16, wrap_all_cols=True,
+    dynamic_row_height=True, skip_empty_rows=True, justify_cols={2,3},
  ),
 
  'Seguros': dict(
@@ -889,14 +999,15 @@ TABLES_EN = {'EBITDA': {'group_headers': [(0, 1, 2, 'CALENDAR YEAR\n(6 months)')
              'cybersecurity exercise at the global level.',
  }}}
 
-def render_table_en(wb, tkey, out_path, dpi=300):
+def render_table_en(wb, tkey, out_path, dpi=300, usable_width_in=None):
     """Atajo: arma el spec en inglés para TABLES[tkey] (spec español + group_headers/footnote/
     label_overrides de TABLES_EN[tkey], si existen) y llama a render_table(..., lang='en')."""
     spec = dict(TABLES[tkey])
     over = TABLES_EN.get(tkey, {})
     if 'group_headers' in over: spec['group_headers'] = over['group_headers']
     if 'footnote' in over: spec['footnote'] = over['footnote']
-    render_table(wb, spec, out_path, dpi=dpi, lang='en', label_overrides=over.get('label_overrides', {}))
+    render_table(wb, spec, out_path, dpi=dpi, lang='en', label_overrides=over.get('label_overrides', {}),
+                 usable_width_in=usable_width_in)
 
 if __name__=='__main__':
  import sys,os,shutil,zipfile,tempfile,re
@@ -950,4 +1061,4 @@ if __name__=='__main__':
     fp=os.path.join(root,file)
     z.write(fp,os.path.relpath(fp,tmp))
  shutil.rmtree(tmp); shutil.rmtree(img_dir)
- print(f'✅ Listo → {out_path} ({repl} imágenes)
+ print(f'✅ Listo → {out_path} ({repl} imágenes)')

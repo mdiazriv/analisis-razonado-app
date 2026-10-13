@@ -80,42 +80,60 @@ if generate_clicked:
                 log = [traceback.format_exc()]
                 ok = False
 
+        data = None
         if ok and os.path.exists(out_path):
-            st.success("Documento generado correctamente.")
             with open(out_path, "rb") as f:
                 data = f.read()
-            fname = f"Analisis_Razonado_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
-            st.download_button(
-                "⬇️ Descargar Word actualizado",
-                data=data,
-                file_name=fname,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-        else:
-            st.error("Hubo un error generando el documento. Revisa el detalle abajo.")
 
-        with st.expander("Ver detalle del proceso (qué se actualizó, avisos y errores)", expanded=not ok):
-            avisos = [l for l in log if l.startswith("[AVISO]")]
-            errores = [l for l in log if l.startswith("[ERROR]") or "Traceback" in l]
-            oks = [l for l in log if l.startswith("[OK]")]
-            infos = [l for l in log if l.startswith("[INFO]")]
+        # Se guarda en session_state (en vez de usarse solo dentro de este "if") para que el botón
+        # de descarga y el detalle del proceso sigan apareciendo aunque Streamlit vuelva a correr el
+        # script por otra interacción (ej. hacer clic en el propio botón de descarga) — si no, al
+        # hacer clic en "Descargar" este bloque completo desaparecía en el rerun siguiente.
+        st.session_state["es_result"] = {
+            "ok": ok,
+            "data": data,
+            "fname": f"Analisis_Razonado_{datetime.now().strftime('%Y%m%d_%H%M')}.docx",
+            "log": log,
+        }
 
-            if infos:
-                st.write("\n".join(infos))
-            if errores:
-                st.markdown("**Errores:**")
-                st.code("\n".join(errores))
-            if avisos:
-                st.markdown("**Avisos (revisar):**")
-                st.code("\n".join(avisos))
-            st.markdown(f"**{len(oks)} elementos actualizados correctamente.**")
-            st.code("\n".join(oks) if oks else "(sin detalle)")
+result = st.session_state.get("es_result")
+if result:
+    if result["ok"] and result["data"]:
+        st.success("Documento generado correctamente.")
+        st.download_button(
+            "⬇️ Descargar Word actualizado",
+            data=result["data"],
+            file_name=result["fname"],
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="dl_word_es",
+        )
+    else:
+        st.error("Hubo un error generando el documento. Revisa el detalle abajo.")
+
+    with st.expander("Ver detalle del proceso (qué se actualizó, avisos y errores)", expanded=not result["ok"]):
+        log = result["log"]
+        avisos = [l for l in log if l.startswith("[AVISO]")]
+        errores = [l for l in log if l.startswith("[ERROR]") or "Traceback" in l]
+        oks = [l for l in log if l.startswith("[OK]")]
+        infos = [l for l in log if l.startswith("[INFO]")]
+
+        if infos:
+            st.write("\n".join(infos))
+        if errores:
+            st.markdown("**Errores:**")
+            st.code("\n".join(errores))
+        if avisos:
+            st.markdown("**Avisos (revisar):**")
+            st.code("\n".join(avisos))
+        st.markdown(f"**{len(oks)} elementos actualizados correctamente.**")
+        st.code("\n".join(oks) if oks else "(sin detalle)")
 
 st.divider()
 st.caption(
     "Recuerda revisar antes de enviar: todo el texto resaltado en amarillo en el Word "
-    "resultante, y las secciones que esta versión aún no regenera (Flujo de Efectivo, "
-    "Riesgos/Seguros/Exposición Cambiaria, Valor libro de la acción) — ver README."
+    "resultante, la columna de Comentarios del Flujo de Efectivo (se deja para que la completes "
+    "tú misma) y las secciones que esta versión todavía no cubre (Valor libro de la acción) — ver "
+    "README."
 )
 
 # ---------------------------------------------------------------------------
@@ -211,52 +229,79 @@ else:
                     log_xl_en = [traceback.format_exc()]
                     ok_excel_en = False
 
+            data_word_en = None
             if ok_word_en and os.path.exists(out_word_path_en):
-                st.success("Word en inglés generado correctamente.")
                 with open(out_word_path_en, "rb") as f:
                     data_word_en = f.read()
-                fname_word_en = f"Analisis_Razonado_EN_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
-                st.download_button(
-                    "⬇️ Descargar Word en inglés",
-                    data=data_word_en,
-                    file_name=fname_word_en,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    key="dl_word_en",
-                )
-            else:
-                st.error("Hubo un error generando el Word en inglés. Revisa el detalle abajo.")
 
+            data_excel_en = None
             if ok_excel_en:
-                st.success("Excel traducido al inglés generado correctamente.")
                 with open(out_excel_path_en, "rb") as f:
                     data_excel_en = f.read()
-                fname_excel_en = f"Datos_AR_EN_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-                st.download_button(
-                    "⬇️ Descargar Excel en inglés",
-                    data=data_excel_en,
-                    file_name=fname_excel_en,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="dl_excel_en",
-                )
-            else:
-                st.error("Hubo un error generando el Excel en inglés. Revisa el detalle abajo.")
 
-            with st.expander("Ver detalle del proceso (Word + Excel en inglés)", expanded=not (ok_word_en and ok_excel_en)):
-                st.markdown("**Word en inglés:**")
-                avisos_en = [l for l in log_en if l.startswith("[AVISO]")]
-                errores_en = [l for l in log_en if l.startswith("[ERROR]") or "Traceback" in l]
-                oks_en = [l for l in log_en if l.startswith("[OK]")]
-                if errores_en:
-                    st.markdown("_Errores:_")
-                    st.code("\n".join(errores_en))
-                if avisos_en:
-                    st.markdown("_Avisos (revisar):_")
-                    st.code("\n".join(avisos_en))
-                st.markdown(f"_{len(oks_en)} elementos actualizados correctamente._")
-                st.code("\n".join(oks_en) if oks_en else "(sin detalle)")
+            # Igual que en la sección en español: se guarda todo en session_state para que los dos
+            # botones de descarga (Word + Excel) y el detalle del proceso sigan visibles aunque se
+            # haga clic en uno de ellos — antes, al estar solo dentro de este "if generate_en_clicked",
+            # un clic en "Descargar Excel en inglés" hacía desaparecer el botón de "Descargar Word en
+            # inglés" (y viceversa) en el rerun siguiente, porque Streamlit vuelve a correr el script
+            # completo en cada clic y generate_en_clicked vuelve a ser False.
+            st.session_state["en_results"] = {
+                "ok_word_en": ok_word_en,
+                "data_word_en": data_word_en,
+                "fname_word_en": f"Analisis_Razonado_EN_{datetime.now().strftime('%Y%m%d_%H%M')}.docx",
+                "ok_excel_en": ok_excel_en,
+                "data_excel_en": data_excel_en,
+                "fname_excel_en": f"Datos_AR_EN_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                "log_en": log_en,
+                "log_xl_en": log_xl_en,
+            }
 
-                st.markdown("**Excel en inglés:**")
-                st.code("\n".join(log_xl_en) if log_xl_en else "(sin detalle)")
+    en_results = st.session_state.get("en_results")
+    if en_results:
+        if en_results["ok_word_en"] and en_results["data_word_en"]:
+            st.success("Word en inglés generado correctamente.")
+            st.download_button(
+                "⬇️ Descargar Word en inglés",
+                data=en_results["data_word_en"],
+                file_name=en_results["fname_word_en"],
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="dl_word_en",
+            )
+        else:
+            st.error("Hubo un error generando el Word en inglés. Revisa el detalle abajo.")
+
+        if en_results["ok_excel_en"] and en_results["data_excel_en"]:
+            st.success("Excel traducido al inglés generado correctamente.")
+            st.download_button(
+                "⬇️ Descargar Excel en inglés",
+                data=en_results["data_excel_en"],
+                file_name=en_results["fname_excel_en"],
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_excel_en",
+            )
+        else:
+            st.error("Hubo un error generando el Excel en inglés. Revisa el detalle abajo.")
+
+        with st.expander(
+            "Ver detalle del proceso (Word + Excel en inglés)",
+            expanded=not (en_results["ok_word_en"] and en_results["ok_excel_en"]),
+        ):
+            st.markdown("**Word en inglés:**")
+            log_en = en_results["log_en"]
+            avisos_en = [l for l in log_en if l.startswith("[AVISO]")]
+            errores_en = [l for l in log_en if l.startswith("[ERROR]") or "Traceback" in l]
+            oks_en = [l for l in log_en if l.startswith("[OK]")]
+            if errores_en:
+                st.markdown("_Errores:_")
+                st.code("\n".join(errores_en))
+            if avisos_en:
+                st.markdown("_Avisos (revisar):_")
+                st.code("\n".join(avisos_en))
+            st.markdown(f"_{len(oks_en)} elementos actualizados correctamente._")
+            st.code("\n".join(oks_en) if oks_en else "(sin detalle)")
+
+            st.markdown("**Excel en inglés:**")
+            st.code("\n".join(en_results["log_xl_en"]) if en_results["log_xl_en"] else "(sin detalle)")
 
     st.caption(
         "El Excel en inglés queda acotado a las 18 tablas que aparecen en el Word: se quitan las "
