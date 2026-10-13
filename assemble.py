@@ -746,12 +746,17 @@ def apply_bridge_bullets(doc, wb, periods, causes, log):
 # ---------- Tablas / imágenes ----------
 EMU_PER_INCH = 914400
 
-def collect_and_render_tables(wb, word_path, log):
+def collect_and_render_tables(wb, word_path, log, doc=None):
     """Decide qué imagen (image1.emf, image2.emf, ...) del Word ORIGINAL corresponde a cada tabla, y
-    renderiza el PNG actualizado para cada una. Devuelve ({nombre_media_original: ruta_png_nueva}, img_dir)."""
+    renderiza el PNG actualizado para cada una. Devuelve ({nombre_media_original: ruta_png_nueva}, img_dir).
+    doc: el Word ya abierto (python-docx), si está disponible — se usa solo para calcular el ancho
+    útil de página y así compensar el achicamiento que Word aplica a una tabla más ancha que la
+    página (ver render_tables_v5.usable_width_inches / el parámetro usable_width_in de render_table)."""
     rt_dir = os.path.dirname(__file__)
     sys.path.insert(0, rt_dir)
     import render_tables_v5 as RT
+
+    usable_width_in = RT.usable_width_inches(doc) if doc is not None else None
 
     RT.TABLES['IngresosxSegmento']['sheet'] = 'IngresosxSegmento'
     if 'Indicadores1' not in wb.sheetnames and 'Ind. Financieros' in wb.sheetnames:
@@ -782,7 +787,7 @@ def collect_and_render_tables(wb, word_path, log):
             image_map[a] = rendered[tkey]; continue
         out_png = os.path.join(img_dir, f'{tkey}.png')
         try:
-            RT.render_table(wb, spec, out_png, dpi=300)
+            RT.render_table(wb, spec, out_png, dpi=300, usable_width_in=usable_width_in)
             image_map[a] = out_png; rendered[tkey] = out_png
             log.append(f"[OK] Tabla renderizada: {tkey}")
         except Exception as ex:
@@ -873,6 +878,126 @@ def apply_global_sweep(doc, old_periods, new_periods, log):
                 n_runs += 1
     log.append(f"[OK] Barrido final de fechas/etiquetas sueltas: {n_runs} fragmentos de texto corregidos")
 
+# ---------- Flujo de Efectivo (tabla nativa de Word, no una imagen) ----------
+# A diferencia de las demás tablas (EBITDA, Ingresos, Balance, etc.), que son imágenes generadas
+# por render_tables_v5.py, la tabla de Flujo de Efectivo del Word es una tabla NATIVA (celdas de
+# Word de verdad) — por eso se actualiza aparte, celda por celda, en vez de por el pipeline de
+# imágenes. La hoja de Excel que la alimenta es 'FdeC' (confirmado con Melissa).
+FLUJO_CAJA_HEADER_ANCHOR = r"Principales fuentes y usos de fondos del periodo"
+
+def set_cell_text(cell, text):
+    """Como set_paragraph_text, pero para una celda de tabla nativa de Word: reemplaza el texto del
+    primer párrafo de la celda por `text`, conservando fuente/tamaño/negrita/subrayado del primer
+    run que ya tenía — así una fila de Total (en negrita en la plantilla) sigue en negrita después
+    de actualizar su cifra, sin tener que saber de antemano cuáles filas son de Total."""
+    para = cell.paragraphs[0]
+    base_font_name = None; base_size = None; base_bold = None; base_underline = None
+    if para.runs:
+        r0 = para.runs[0]
+        base_font_name = r0.font.name; base_size = r0.font.size
+        base_bold = r0.font.bold; base_underline = r0.font.underline
+    for r in list(para.runs):
+        r._element.getparent().remove(r._element)
+    run = para.add_run(text)
+    if base_font_name: run.font.name = base_font_name
+    if base_size: run.font.size = base_size
+    if base_bold is not None: run.bold = base_bold
+    if base_underline: run.font.underline = True
+
+def _norm_label(s):
+    return re.sub(r'\s+', ' ', (s or '')).strip().rstrip('.').lower()
+
+def _fmt_fdec(n):
+    """Mismo estilo que las demás cifras del informe (miles con punto, decimales con coma,
+    negativos entre paréntesis), pero con 2 decimales en vez de 0 — así es como viene redactada
+    esta tabla en particular (ej. '704,06', '(450,09)')."""
+    if n is None or n == '':
+        return ''
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return str(n)
+    formatted = f'{abs(n):,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f'({formatted})' if n < 0 else formatted
+
+def _find_fdec_header(ws):
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            v = ws.cell(r, c).value
+            if isinstance(v, str) and re.search(FLUJO_CAJA_HEADER_ANCHOR, v):
+                return r, c
+    return None, None
+
+def update_flujo_caja_table(doc, wb, log):
+    """Actualiza la tabla nativa de Flujo de Efectivo emparejando cada fila del Word con su fila en
+    la hoja 'FdeC' del Excel POR ETIQUETA (no por posición): la plantilla de Word suele mostrar un
+    subconjunto curado de las líneas del Excel (se omiten ítems poco significativos, pero los
+    totales igual cuadran con el Excel completo), así que una fila del Word que no encuentra su
+    etiqueta en el Excel se deja tal cual (con un aviso) en vez de adivinar. Nunca toca la columna
+    de Comentarios (ni ninguna columna más allá de la 3ra) — esa la completa Melissa a mano cada
+    trimestre."""
+    if 'FdeC' not in wb.sheetnames:
+        log.append("[AVISO] No encontré la hoja 'FdeC' en el Excel: no se actualizó el Flujo de Efectivo.")
+        return
+    ws = wb['FdeC']
+    hr, hc = _find_fdec_header(ws)
+    if hr is None:
+        log.append("[AVISO] No encontré el encabezado del Flujo de Efectivo en la hoja 'FdeC' (busqué "
+                    f"'{FLUJO_CAJA_HEADER_ANCHOR}'): no se actualizó.")
+        return
+    cur_col, prior_col = hc + 1, hc + 2
+    header_cur_label = ws.cell(hr, cur_col).value
+    header_prior_label = ws.cell(hr, prior_col).value
+
+    data = {}
+    r = hr + 1
+    while True:
+        label = ws.cell(r, hc).value
+        if label is None or label == '':
+            break
+        data[_norm_label(label)] = (ws.cell(r, cur_col).value, ws.cell(r, prior_col).value)
+        r += 1
+
+    target_table = None
+    for t in doc.tables:
+        try:
+            first_cell_text = t.rows[0].cells[0].text
+        except Exception:
+            continue
+        if re.search(FLUJO_CAJA_HEADER_ANCHOR, first_cell_text):
+            target_table = t
+            break
+    if target_table is None:
+        log.append("[AVISO] No encontré la tabla de Flujo de Efectivo en el Word (ninguna tabla empieza con "
+                    f"'{FLUJO_CAJA_HEADER_ANCHOR}'): no se actualizó.")
+        return
+
+    n_updated = 0
+    missing = []
+    for ri, row in enumerate(target_table.rows):
+        cells = row.cells
+        if len(cells) < 3:
+            continue
+        if ri == 0:
+            if header_cur_label: set_cell_text(cells[1], str(header_cur_label).strip())
+            if header_prior_label: set_cell_text(cells[2], str(header_prior_label).strip())
+            continue
+        label = _norm_label(cells[0].text)
+        if label in data:
+            cur_val, prior_val = data[label]
+            set_cell_text(cells[1], _fmt_fdec(cur_val))
+            set_cell_text(cells[2], _fmt_fdec(prior_val))
+            n_updated += 1
+        else:
+            missing.append(cells[0].text.strip()[:60])
+
+    msg = f"[OK] Flujo de Efectivo actualizado: {n_updated} fila(s) con cifras nuevas del Excel ('FdeC')."
+    if missing:
+        msg += (f" {len(missing)} fila(s) del Word no encontraron su etiqueta en el Excel y se dejaron "
+                f"tal cual (revisa si cambió la redacción): {'; '.join(missing)}")
+    log.append(msg)
+    log.append("[INFO] Flujo de Efectivo: la columna de Comentarios no se toca — complétala tú misma cada trimestre.")
+
 def generate(excel_path, word_path, out_path):
     log = []
     wb = openpyxl.load_workbook(excel_path, data_only=True)
@@ -891,8 +1016,9 @@ def generate(excel_path, word_path, out_path):
     apply_single_templates(doc, wb, periods, causes, log)
     apply_bridge_bullets(doc, wb, periods, causes, log)
     apply_global_sweep(doc, old_periods, periods, log)
+    update_flujo_caja_table(doc, wb, log)
 
-    image_map, img_dir = collect_and_render_tables(wb, word_path, log)
+    image_map, img_dir = collect_and_render_tables(wb, word_path, log, doc=doc)
     fix_image_frame_sizes(doc, image_map, log)
 
     tmp_text_docx = word_path + '.text.docx'

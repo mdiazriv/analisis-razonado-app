@@ -515,15 +515,16 @@ def apply_global_sweep(doc, old_periods, new_periods, log):
                 n_runs += 1
     log.append(f"[OK] (EN) Barrido final de fechas/etiquetas sueltas: {n_runs} fragmentos de texto corregidos")
 
-def collect_and_render_tables_en(wb, word_path, log):
+def collect_and_render_tables_en(wb, word_path, log, doc=None):
     """Igual que collect_and_render_tables (assemble.py) pero renderiza cada tabla en inglés
     (render_table_en: mismo Excel en español, formato en-US + etiquetas traducidas vía TABLES_EN).
-    La tabla 'Riesgos' (detalle narrativo de riesgos, todavía no traducido — ver render_tables_v5.py)
-    se omite aquí a propósito, así que esa imagen queda con la del Word BASE en inglés tal cual
-    (texto libre en español dentro de una tabla que de por sí ya viene en inglés en el base)."""
+    doc: el Word en inglés ya abierto, si está disponible — mismo uso que en
+    assemble.collect_and_render_tables (compensar el achicamiento de página de Word)."""
     rt_dir = os.path.dirname(__file__)
     sys.path.insert(0, rt_dir)
     import render_tables_v5 as RT
+
+    usable_width_in = RT.usable_width_inches(doc) if doc is not None else None
 
     RT.TABLES['IngresosxSegmento']['sheet'] = 'IngresosxSegmento'
     if 'Indicadores1' not in wb.sheetnames and 'Ind. Financieros' in wb.sheetnames:
@@ -551,7 +552,7 @@ def collect_and_render_tables_en(wb, word_path, log):
             image_map[a] = rendered[tkey]; continue
         out_png = os.path.join(img_dir, f'{tkey}.png')
         try:
-            RT.render_table_en(wb, tkey, out_png, dpi=300)
+            RT.render_table_en(wb, tkey, out_png, dpi=300, usable_width_in=usable_width_in)
             image_map[a] = out_png; rendered[tkey] = out_png
             log.append(f"[OK] (EN) Tabla renderizada: {tkey}")
         except Exception as ex:
@@ -603,6 +604,159 @@ def _merge_causes_from_edited_es(causes, wb, word_es_edited_path, log):
             "mantienen las del Word en inglés base (si había) o solo el aviso genérico"
         )
 
+# ---------- Flujo de Efectivo / Cash Flow (tabla nativa de Word, no una imagen) ----------
+# Misma idea que assemble.update_flujo_caja_table (reutiliza su _find_fdec_header, _norm_label y
+# set_cell_text, vía ASM_ES), pero traduciendo cada etiqueta del Excel (en español) a su
+# equivalente en inglés antes de buscarla en la tabla del Word — porque esta tabla, en el Word en
+# inglés, ya viene con las etiquetas traducidas (igual que la tabla 'Riesgos' en render_tables_v5.
+# TABLES_EN). Las traducciones se verificaron contra Word en inglés reales de Hortifrut
+# (ar_test_en/roundtrip_june.docx y las demás variantes de ese mismo trimestre); las pocas filas
+# que no aparecieron en ningún Word real de referencia (ítems que el Excel trae en 0 casi siempre,
+# así que rara vez se muestran) se tradujeron de forma directa y literal.
+FDEC_LABELS_EN = {
+    'cobros procedentes de las ventas de bienes y prestación de servicios':
+        'Charges from the sale of goods and providing of services',
+    'pago a proveedores por los suministros de bienes y servicios':
+        'Payment to suppliers for supplying of goods and services',
+    'pago por y a cuenta de empleados': 'Payment for and on behalf of employees',
+    'intereses netos': 'Net interests',
+    'impuestos': 'Taxes',
+    'otros': 'Other',
+    '(1) total flujo de efectivo por actividades de operación':
+        '(1) Total Cash Flow for Operating Activities',
+    'flujos de efectivo procedentes de la pérdida de control de subsidiarias u otros negocios':
+        'Cash flows from loss of control of subsidiaries or other businesses',
+    'flujos de efectivo utilizados para obtener el control de subsidiarias u otros negocios':
+        'Cash flows used to obtain control of subsidiaries or other businesses',
+    'flujos de efectivo utilizados en la compra de participaciones no controladoras':
+        'Cash flows used in the purchase of non-controlling interests',
+    'otros pagos para adquirir patrimonio o instrumentos de deuda de otras entidades':
+        'Other payments to acquire equity or debt instruments of other entities',
+    'venta y compra de propiedades, plantas y equipos':
+        'Sale and purchase of property, plant and equipment',
+    'compras de activos intangibles': 'Purchases of intangible assets',
+    'compras de otros activos a largo plazo': 'Purchases of other long-term assets',
+    'dividendos recibidos': 'Dividends received',
+    '(2) total flujo de efectivo por actividades de inversión':
+        '(2) Total Cash Flow for Investment Activities',
+    'préstamos de entidades relacionadas': 'Loans from related entities',
+    'ingresos por financiamiento': 'Income from financing',
+    'pagos de préstamos': 'Payment of loans',
+    'pagos de pasivos por arrendamiento': 'Payments of lease liabilities',
+    'importes procedentes de la emisión de acciones': 'Proceeds from the issuance of shares',
+    'dividendos pagados y otros flujos de inversión': 'Dividends paid and other investment flows',
+    '(3) total flujo de efectivo por actividades de financiamiento':
+        '(3) Total Cash Flow for Financing Activities',
+    'incremento neto de efectivo y equivalentes de efectivo (1) + (2) + (3)':
+        'Net Increase of Cash and Cash Equivalents (1) + (2) + (3)',
+    'efecto por variación del tipo de cambio': 'Effect of exchange rate fluctuation',
+    'efectivo y equivalente al efectivo al principio del periodo':
+        'Cash and Cash Equivalent at the start of the period',
+    'efectivo y equivalente al efectivo al final del período':
+        'Cash and Cash Equivalent at the End of the Period',
+}
+
+_MESES_ES_EN_FDEC = {
+    'enero': 'January', 'febrero': 'February', 'marzo': 'March', 'abril': 'April', 'mayo': 'May',
+    'junio': 'June', 'julio': 'July', 'agosto': 'August', 'septiembre': 'September',
+    'setiembre': 'September', 'octubre': 'October', 'noviembre': 'November', 'diciembre': 'December',
+}
+
+def _translate_fdec_header_en(s):
+    """Traduce el rango de fechas del encabezado ('Enero-Junio 2026' -> 'January-June 2026'); si el
+    texto no calza con el patrón esperado, se deja tal cual en vez de inventar algo."""
+    if not s:
+        return s
+    m = re.match(r'^\s*([A-Za-zñÑáéíóúÁÉÍÓÚ]+)\s*-\s*([A-Za-zñÑáéíóúÁÉÍÓÚ]+)\s+(\d{4})\s*$', s)
+    if not m:
+        return s
+    e1 = _MESES_ES_EN_FDEC.get(m.group(1).lower())
+    e2 = _MESES_ES_EN_FDEC.get(m.group(2).lower())
+    if not e1 or not e2:
+        return s
+    return f"{e1}-{e2} {m.group(3)}"
+
+def update_flujo_caja_table_en(doc, wb, log):
+    """Igual que assemble.update_flujo_caja_table, pero para el Word en inglés: cada etiqueta de la
+    hoja 'FdeC' se traduce con FDEC_LABELS_EN antes de buscarla en la tabla (que ya viene con las
+    etiquetas en inglés), y las cifras se formatean en-US (sin decimales, igual que el resto de las
+    cifras en inglés del informe — ver fmt_en en render_tables_v5.py). La columna de Comments (si
+    existe) nunca se toca."""
+    rt_dir = os.path.dirname(__file__)
+    sys.path.insert(0, rt_dir)
+    import render_tables_v5 as RT
+
+    if 'FdeC' not in wb.sheetnames:
+        log.append("[AVISO] (EN) No encontré la hoja 'FdeC' en el Excel: no se actualizó el Cash Flow.")
+        return
+    ws = wb['FdeC']
+    hr, hc = ASM_ES._find_fdec_header(ws)
+    if hr is None:
+        log.append("[AVISO] (EN) No encontré el encabezado del Flujo de Efectivo en la hoja 'FdeC': no se actualizó.")
+        return
+    cur_col, prior_col = hc + 1, hc + 2
+    header_cur_label = _translate_fdec_header_en(str(ws.cell(hr, cur_col).value or '').strip())
+    header_prior_label = _translate_fdec_header_en(str(ws.cell(hr, prior_col).value or '').strip())
+
+    data_en = {}
+    unmapped_es = []
+    r = hr + 1
+    while True:
+        label = ws.cell(r, hc).value
+        if label is None or label == '':
+            break
+        norm_es = ASM_ES._norm_label(label)
+        en_label = FDEC_LABELS_EN.get(norm_es)
+        if en_label:
+            data_en[ASM_ES._norm_label(en_label)] = (ws.cell(r, cur_col).value, ws.cell(r, prior_col).value)
+        else:
+            unmapped_es.append(str(label).strip()[:60])
+        r += 1
+
+    target_table = None
+    for t in doc.tables:
+        try:
+            first_cell_text = t.rows[0].cells[0].text
+        except Exception:
+            continue
+        if re.search(r'[Mm]ain sources and uses of funds', first_cell_text):
+            target_table = t
+            break
+    if target_table is None:
+        log.append("[AVISO] (EN) No encontré la tabla de Cash Flow en el Word en inglés: no se actualizó.")
+        return
+
+    n_updated = 0
+    missing = []
+    for ri, row in enumerate(target_table.rows):
+        cells = row.cells
+        if len(cells) < 3:
+            continue
+        if ri == 0:
+            if header_cur_label: ASM_ES.set_cell_text(cells[1], header_cur_label)
+            if header_prior_label: ASM_ES.set_cell_text(cells[2], header_prior_label)
+            continue
+        label = ASM_ES._norm_label(cells[0].text)
+        if label in data_en:
+            cur_val, prior_val = data_en[label]
+            ASM_ES.set_cell_text(cells[1], RT.fmt_en(cur_val, 'num'))
+            ASM_ES.set_cell_text(cells[2], RT.fmt_en(prior_val, 'num'))
+            n_updated += 1
+        else:
+            missing.append(cells[0].text.strip()[:60])
+
+    msg = f"[OK] (EN) Cash Flow actualizado: {n_updated} fila(s) con cifras nuevas del Excel ('FdeC')."
+    if missing:
+        msg += (f" {len(missing)} fila(s) del Word no encontraron su etiqueta traducida y se dejaron "
+                f"tal cual (revisa si cambió la redacción): {'; '.join(missing)}")
+    log.append(msg)
+    if unmapped_es:
+        log.append(
+            "[AVISO] (EN) Filas del Excel 'FdeC' sin traducción registrada en FDEC_LABELS_EN (no se "
+            f"usaron porque no tengo cómo buscarlas en el Word en inglés): {'; '.join(unmapped_es)}"
+        )
+    log.append("[INFO] (EN) Cash Flow: la columna de Comments no se toca — complétala tú misma cada trimestre.")
+
 def generate_en(excel_path, word_path, out_path, word_es_edited_path=None):
     log = []
     wb = openpyxl.load_workbook(excel_path, data_only=True)
@@ -621,8 +775,9 @@ def generate_en(excel_path, word_path, out_path, word_es_edited_path=None):
     apply_single_templates(doc, wb, periods, causes, log)
     apply_bridge_bullets(doc, wb, periods, causes, log)
     apply_global_sweep(doc, old_periods, periods, log)
+    update_flujo_caja_table_en(doc, wb, log)
 
-    image_map, img_dir = collect_and_render_tables_en(wb, word_path, log)
+    image_map, img_dir = collect_and_render_tables_en(wb, word_path, log, doc=doc)
     from assemble import fix_image_frame_sizes, swap_media_bytes
     fix_image_frame_sizes(doc, image_map, log)
 
