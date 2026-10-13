@@ -950,4 +950,4 @@ if __name__=='__main__':
     fp=os.path.join(root,file)
     z.write(fp,os.path.relpath(fp,tmp))
  shutil.rmtree(tmp); shutil.rmtree(img_dir)
- print(f'✅ Listo → {out_path} ({repl} imágenes)')
+ print(f'✅ Listo → {out_path} ({repl} imágenes)
