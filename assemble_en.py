@@ -757,6 +757,38 @@ def update_flujo_caja_table_en(doc, wb, log):
         )
     log.append("[INFO] (EN) Cash Flow: la columna de Comments no se toca — complétala tú misma cada trimestre.")
 
+# Algunas plantillas Word en inglés (vistas en la de marzo 2026, pero no en la de junio) traen, debajo
+# del texto "Main critical risks faced as of ... are the following:", una tabla NATIVA de Word vieja
+# (encabezados "Type of Risk / Name of the Risk / Description of the Risk / Corporate Controls
+# Implemented") con contenido genérico/desactualizado (ej. "Water supply, availability and quality",
+# "Cybersecurity attacks") que NO existe en la versión en español equivalente — ahí esa misma sección
+# solo trae la imagen con el detalle real de riesgos (tabla 'Riesgos' de render_tables_v5, ya traducida
+# más abajo en TABLES_EN). Melissa reportó que el tema de riesgos críticos "queda repetido" en inglés
+# por esto: la plantilla muestra la tabla vieja Y, en otra parte del documento, nuestra imagen con el
+# detalle real — dos cosas hablando de lo mismo. Como esta tabla vieja es contenido estático de la
+# plantilla (no algo que nuestro código inserte), no hay celdas que "actualizar" como en Flujo de
+# Efectivo: la solución es borrarla directamente para igualar la estructura a la versión en español.
+# El encabezado buscado es muy específico (no puede confundirse con la tabla de Flujo de Efectivo,
+# cuyo encabezado es "Main sources and uses of funds...").
+_STALE_RISK_TABLE_HEADER_RE = re.compile(r'type of risk', re.IGNORECASE)
+
+def remove_stale_risk_table_en(doc, log):
+    removed = 0
+    for t in list(doc.tables):
+        try:
+            header_row_text = ' | '.join(c.text for c in t.rows[0].cells)
+        except Exception:
+            continue
+        if _STALE_RISK_TABLE_HEADER_RE.search(header_row_text) and 'corporate controls' in header_row_text.lower():
+            t._element.getparent().remove(t._element)
+            removed += 1
+    if removed:
+        log.append(
+            f"[OK] (EN) Se encontró y eliminó {removed} tabla(s) nativa(s) de riesgos obsoleta(s) en la "
+            "plantilla ('Type of Risk / Name of the Risk / ...') que no existen en la versión en español: "
+            "el detalle real de riesgos ya lo muestra la imagen traducida más abajo en el documento."
+        )
+
 def generate_en(excel_path, word_path, out_path, word_es_edited_path=None):
     log = []
     wb = openpyxl.load_workbook(excel_path, data_only=True)
@@ -776,6 +808,7 @@ def generate_en(excel_path, word_path, out_path, word_es_edited_path=None):
     apply_bridge_bullets(doc, wb, periods, causes, log)
     apply_global_sweep(doc, old_periods, periods, log)
     update_flujo_caja_table_en(doc, wb, log)
+    remove_stale_risk_table_en(doc, log)
 
     image_map, img_dir = collect_and_render_tables_en(wb, word_path, log, doc=doc)
     from assemble import fix_image_frame_sizes, swap_media_bytes

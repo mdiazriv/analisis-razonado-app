@@ -39,6 +39,32 @@ los informes reales de septiembre y diciembre.
   primero (ver `FDEC_LABELS_EN` en `ar_scripts/assemble_en.py`) y luego se busca en el Word en
   inglés de la misma forma.
 
+**Últimos ajustes (ronda 2, reportados por Melissa):**
+- **Alineación de texto:** a pedido explícito, TODO el texto de las tablas (etiquetas, encabezados
+  y números) ahora va alineado a la izquierda en vez de centrado — se notaba sobre todo en la
+  tabla de Deuda Financiera Neta, pero el cambio aplica a todas las tablas, en español e inglés.
+  Los títulos de sección que ocupan varias columnas (ej. "AÑO CALENDARIO (6 meses)") se mantienen
+  centrados porque son títulos, no datos.
+- **Exposición en Monedas:** la columna con el nombre de la cuenta se ensanchó (a costa de las 8
+  columnas de moneda, que siguen entrando cómodas) para que las etiquetas largas quepan en menos
+  líneas, y cada fila ahora mide solo lo que su texto necesita (antes todas las filas tenían el
+  mismo alto fijo, pensado para la etiqueta más larga, así que la tabla se veía mucho más extensa
+  hacia abajo de lo necesario).
+- **Riesgos críticos duplicados (versión en inglés):** en algunas plantillas Word en inglés (se
+  vio en la de marzo 2026, no en la de junio) queda una tabla nativa vieja, con contenido genérico
+  de un borrador anterior, justo debajo del texto "Main critical risks faced as of ... are the
+  following:" — esta tabla no existe en la versión en español, donde esa misma sección solo trae
+  la imagen con el detalle real de riesgos (ya traducida). La app ahora detecta y elimina esa
+  tabla vieja automáticamente, para que la sección quede igual que en español. Si tu plantilla en
+  inglés de un trimestre antiguo tiene una estructura de imágenes muy distinta a la de junio 2026
+  (por ejemplo, si a esa plantilla le falta alguna imagen de riesgos), otras tablas de esa misma
+  plantilla podrían no quedar en el lugar correcto — avísame si ves algo así y lo revisamos para
+  ese archivo puntual.
+- **Traducción en vivo de la tabla de Riesgos (DeepL):** a pedido explícito de Melissa, aceptando
+  el trade-off de que ese texto puntual sale hacia un servicio externo. Queda **desactivada por
+  defecto** (si no configuras la API key, la app sigue funcionando igual que antes, 100% local) —
+  ver "Traducción en vivo de Riesgos (DeepL)" más abajo para cómo activarla.
+
 ## Instalación (una sola vez)
 
 1. Instala Python 3.10 o superior si no lo tienes.
@@ -214,10 +240,13 @@ exactamente las mismas en los dos idiomas, porque las escribe una persona, no el
 - Si no subes ese Word, la app intenta reconocer la causa que traía el Word en inglés del
   trimestre anterior (igual que hacía antes) y la deja tal cual, en inglés — pero esa causa puede
   estar desactualizada si cambió el motivo este trimestre; por eso se recomienda el paso 2.
-- En ningún caso se usa un traductor automático (ni local ni por API): mandar el texto financiero
-  de la Compañía a un servicio externo rompería la garantía de que todo se procesa en este
-  computador, y una traducción automática puede cambiar el sentido de un término técnico
-  específico. La traducción final de esa frase corta siempre la hace una persona.
+- Para esta frase puntual no se usa un traductor automático: mandar el texto financiero de la
+  Compañía a un servicio externo rompería la garantía de que todo se procesa en este computador, y
+  una traducción automática puede cambiar el sentido de un término técnico específico. La
+  traducción final de esa frase corta siempre la hace una persona. (La tabla de Riesgos sí puede
+  traducirse en vivo vía DeepL si configuras una API key — ver "Traducción en vivo de Riesgos
+  (DeepL)" más abajo — porque ahí el texto siempre sigue la misma estructura de 4 columnas y es
+  más seguro automatizarlo.)
 
 **Verificación extra — por si editaste algo más allá de la causa resaltada:** cuando subes el Word
 en español ya editado (paso 2), la app además compara, párrafo por párrafo, la parte que **no**
@@ -233,6 +262,41 @@ al guardar (comillas, espacios); igual revisa el párrafo señalado para estar s
 Si la sección no aparece en tu instalación, falta copiar `ar_scripts/assemble_en.py`,
 `ar_scripts/periods_en.py`, `ar_scripts/ar_engine_en.py` y `ar_scripts/excel_translator_en.py`
 (ya incluidos en este zip) a tu carpeta de la app.
+
+### Traducción en vivo de Riesgos (DeepL) — opcional, desactivada por defecto
+
+Las traducciones de las tablas (EBITDA, Balance, Exposición Cambiaria, etc.) son diccionarios fijos
+verificados a mano una vez contra el Word en inglés de referencia, y no cambian de un trimestre a
+otro porque las etiquetas de esas tablas tampoco cambian. La tabla de **Riesgos críticos** es
+distinta: su contenido (nombre del riesgo, descripción, controles) es texto libre que sí puede
+cambiar cada trimestre, así que un diccionario fijo se desactualiza apenas se edita la redacción en
+español o aparece un riesgo nuevo — esto fue justo lo que reportaste como "el texto en inglés no
+está quedando exactamente igual al español".
+
+Para resolverlo, la app puede traducir esa tabla **en vivo** con la API de DeepL en vez de usar el
+diccionario fijo. Esto es opcional y queda **desactivado por defecto** — importante que lo sepas
+porque implica un trade-off real: el texto de esa tabla (nombre/descripción/controles de cada
+riesgo, que todavía no es público ese trimestre) sale de este computador hacia los servidores de
+DeepL para traducirse. Si no activas esto, la app sigue funcionando exactamente igual que antes
+(100% local, con el diccionario fijo como respaldo).
+
+Para activarlo:
+1. Crea una cuenta gratuita en [deepl.com/pro-api](https://www.deepl.com/pro-api) (el plan DeepL
+   API Free no tiene costo, con un límite mensual de caracteres traducidos — de sobra para esta
+   tabla, que es corta). Copia tu API key desde el panel de tu cuenta.
+2. En Streamlit Community Cloud, entra a tu app → **Settings → Secrets**, y agrega:
+   ```
+   DEEPL_API_KEY = "tu-api-key-aquí"
+   ```
+   (Nunca pongas la API key directamente en el código ni la subas a GitHub — el repositorio es
+   público; "Secrets" de Streamlit Cloud es justamente el lugar seguro para esto, invisible para
+   cualquiera que solo vea el código.)
+3. Guarda — Streamlit Cloud vuelve a desplegar la app sola. Cuando generes la versión en inglés,
+   vas a ver un aviso verde "🌐 Traducción en vivo vía DeepL activada" arriba del botón.
+
+Si la API key no está configurada, o DeepL no responde (sin internet, cuota agotada, servicio
+caído), la app no se cae: usa el diccionario fijo como respaldo y sigue generando el resto del
+informe con normalidad.
 
 ## Cómo funciona (para referencia futura)
 

@@ -9,7 +9,12 @@ Cómo correrla (una sola vez, en la carpeta de la app):
 Cada trimestre: subir el Excel con los datos financieros del trimestre y el Word del
 Análisis Razonado del trimestre ANTERIOR (que sirve de plantilla de formato), y descargar
 el Word actualizado. Todo el procesamiento ocurre en este computador; ningún archivo se
-envía a servidores externos.
+envía a servidores externos — con UNA excepción, opcional y desactivada por defecto: si se
+configura una API key de DeepL (ver "Secrets" de Streamlit Cloud / variable DEEPL_API_KEY), el
+texto de la tabla de Riesgos críticos en la versión en inglés se traduce en vivo mandando ese
+texto puntual a los servidores de DeepL (a pedido explícito de Melissa, para que la traducción
+no quede pegada a la de un trimestre anterior). Sin esa API key configurada, nada cambia: la app
+sigue funcionando 100% local, igual que antes.
 """
 import os
 import sys
@@ -32,9 +37,25 @@ import assemble  # noqa: E402
 try:
     import assemble_en  # noqa: E402
     import excel_translator_en  # noqa: E402
+    import deepl_translate  # noqa: E402
     _EN_AVAILABLE = True
 except ImportError:
     _EN_AVAILABLE = False
+
+# Traducción dinámica (DeepL) de la tabla de Riesgos en inglés — opcional y desactivada por
+# defecto. Se activa SOLO si configuraste la API key en "Secrets" de Streamlit Cloud (Settings →
+# Secrets de tu app) así:
+#     DEEPL_API_KEY = "tu-api-key-aquí"
+# Sin esa key, _DEEPL_ON queda en False y la app sigue funcionando exactamente igual que antes
+# (con el diccionario fijo de traducciones como respaldo) — ver deepl_translate.py.
+_DEEPL_ON = False
+if _EN_AVAILABLE:
+    try:
+        _deepl_key = st.secrets.get("DEEPL_API_KEY")
+    except Exception:
+        _deepl_key = None
+    deepl_translate.configure_deepl(_deepl_key)
+    _DEEPL_ON = deepl_translate.is_configured()
 
 st.set_page_config(page_title="Análisis Razonado — Hortifrut", page_icon="📊", layout="centered")
 
@@ -174,15 +195,30 @@ else:
         "con el aviso \"SPANISH — TRANSLATE INTO ENGLISH\" — para que solo tengas que traducir esa "
         "frase corta, en vez de recordarla y redactarla de cero. Así el inglés queda fiel a lo que "
         "escribiste en español **este** trimestre, no a lo que decía el Word en inglés del trimestre "
-        "pasado. **No se traduce de forma automática**: hacerlo implicaría mandar tu texto financiero "
-        "a un servicio externo (rompiendo la garantía de que todo se procesa en este computador) y "
-        "arriesgar una mala traducción de un término técnico. Si no subes este Word, la sección "
+        "pasado. **Esta frase puntual no se traduce de forma automática**: hacerlo implicaría mandar "
+        "tu texto financiero a un servicio externo y arriesgar una mala traducción de un término "
+        "técnico — a diferencia de la tabla de Riesgos más abajo, aquí no hay diccionario fijo "
+        "posible (el texto es libre y distinto cada vez), así que se deja para que tú la traduzcas. "
+        "Si no subes este Word, la sección "
         "funciona igual que antes: deja el aviso genérico en inglés (o la causa del Word en inglés "
         "anterior, si la reconoce) para que la completes tú misma ahí. Además, la app compara cada "
         "párrafo contra lo que el Excel generaría de nuevo y te avisa en el detalle del proceso si "
         "editaste algo a mano fuera del resaltado (una cifra, una palabra), para que revises que el "
         "inglés diga lo mismo ahí."
     )
+
+    if _DEEPL_ON:
+        st.caption(
+            "🌐 Traducción en vivo vía DeepL activada: el texto de la tabla de Riesgos críticos se "
+            "traduce mandando ese texto puntual a los servidores de DeepL, en vez de usar la "
+            "traducción fija de un trimestre anterior."
+        )
+    else:
+        st.caption(
+            "Traducción en vivo vía DeepL: desactivada (no hay API key configurada en \"Secrets\" "
+            "de Streamlit Cloud). La tabla de Riesgos usa la traducción fija guardada; si el texto "
+            "en español cambió este trimestre, revisa que el inglés siga calzando."
+        )
 
     generate_en_clicked = st.button(
         "Generar versión en inglés (Word + Excel)",

@@ -16,6 +16,9 @@ from openpyxl import load_workbook
 from PIL import Image, ImageChops
 from datetime import datetime
 import re
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import deepl_translate as DT
 
 # ── Traducción genérica de tokens de encabezado recurrentes (lang='en') ──
 # Estas celdas vienen directamente del Excel en ESPAÑOL (ar_v2.xlsx; no hay un Excel en inglés separado
@@ -225,6 +228,12 @@ def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None, u
     label_shorten= spec.get('label_shorten', {})   # {row_idx: 'short text'}
     justify_cols = spec.get('justify_cols', set())
     pct_rows = spec.get('pct_rows', set())
+    # dynamic_translate_cols: columnas de texto libre que cambian cada trimestre (ej. la
+    # descripción de un riesgo) y por eso NO se traducen con un diccionario fijo (ver TABLES_EN
+    # más abajo) sino en vivo vía DeepL cuando hay una API key configurada (ver deepl_translate.py
+    # y app.py) — si no hay key configurada, o la llamada falla, se usa el diccionario fijo
+    # (label_overrides) como respaldo, y si tampoco hay eso, se deja el texto en español tal cual.
+    dynamic_translate_cols = spec.get('dynamic_translate_cols', set())
 
     FIG_W = spec.get('fig_w', 8.2)
 
@@ -290,7 +299,21 @@ def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None, u
             else: txt = _fmt(val, style)
 
             if ci == 0 and ri in label_shorten: txt = label_shorten[ri]
-            if (ri, ci) in label_overrides: txt = label_overrides[(ri, ci)]
+
+            if lang == 'en' and ci in dynamic_translate_cols and not is_header and isinstance(val, str) and val.strip():
+                # Texto libre que cambia cada trimestre: traducir en vivo vía DeepL (si hay API key
+                # configurada) en vez de un diccionario fijo, para que no quede pegado al texto de
+                # un trimestre anterior si la redacción en español cambió (ver docstring de
+                # dynamic_translate_cols más arriba).
+                _translated = DT.translate_es_en(val.strip())
+                if _translated:
+                    txt = _translated
+                elif (ri, ci) in label_overrides:
+                    txt = label_overrides[(ri, ci)]
+                # si no hay traducción dinámica ni diccionario fijo de respaldo, se deja el texto
+                # en español tal cual (mejor eso que inventar una traducción)
+            elif (ri, ci) in label_overrides:
+                txt = label_overrides[(ri, ci)]
 
             col_inch = cw[ci] * FIG_W
             # El ancho en caracteres que entra en la columna depende de qué tan grande es la letra:
@@ -370,16 +393,24 @@ def render_table(wb, spec, out_path, dpi=300, lang='es', label_overrides=None, u
 
             txt = cell_text.get((ri, ci), '')
 
-            # Alignment
-            if ci in center_cols or (is_header and ci>0):
-                ha,xp = 'center', x0+w/2
-            else:
-                ha,xp = 'left', x0+0.007
+            # Alignment: a pedido explícito de Melissa (oct-2026), TODO el texto va alineado a la
+            # izquierda —incluidos encabezados y columnas numéricas que antes se centraban vía
+            # center_cols— para que no haya inconsistencia entre tablas (reportado puntualmente en
+            # la tabla de Deuda Financiera Neta, pero pedido para todas). center_cols se deja
+            # declarado en los specs de arriba por si hiciera falta revertir esto puntualmente,
+            # pero ya no se usa para decidir la alineación.
+            ha,xp = 'left', x0+0.007
 
             fw = 'bold' if (is_bold or is_header) else 'normal'
             fs = 'italic' if is_italic else 'normal'  # bold+italic combinado es válido (ver 'Costos': fila Deterioro)
             sz = FONT_HDR if is_header else FONT   # ALWAYS same size for all data rows
-            malign = 'left' if ci in justify_cols else 'center'
+            # multialignment: cómo se alinean entre sí las líneas de una misma celda cuando el
+            # texto se envuelve en 2+ líneas. A pedido explícito de Melissa (oct-2026) todo el
+            # texto queda alineado a la izquierda (ver también 'ha'/'xp' más abajo) — antes era
+            # 'center' por defecto salvo justify_cols; los banners de group_headers (títulos que
+            # ocupan varias columnas, ej. "AÑO CALENDARIO (6 meses)") se renderizan aparte más
+            # abajo y siguen centrados, porque ahí sí tiene sentido (es un título, no un dato).
+            malign = 'left'
 
             ax.text(xp, yt-H*0.5, txt,
                     ha=ha, va='center', fontsize=sz,
@@ -583,14 +614,18 @@ TABLES = {
     # 23=Total Pasivos, 24=Exposicion Neta
     bold_rows={2,10,11,23,24}, total_rows={10,23,24}, header_rows={0,1},
     center_cols=set(range(1,9)),
-    # Columna de etiquetas más ancha (0.28 de un fig_w más generoso) + max_lines=3: con el ancho
-    # angosto anterior (0.27 de 7.4in, max_lines=2) varias etiquetas largas en inglés y en español
-    # se cortaban silenciosamente (wrap_label descarta lo que no entra en 2 líneas) — p.ej. "Trade
-    # and other receivables, current" perdía "current". Con este ancho, la etiqueta más larga entra
-    # en 3 líneas sin perder texto (ver verificación en el chat). col_widths ahora suma 1.0 (antes
-    # sumaba ~0.92, por eso las 2 últimas columnas de moneda quedaban angostas/desalineadas).
-    col_widths=[0.28,0.09,0.09,0.09,0.09,0.09,0.09,0.09,0.09],
+    # Columna de etiquetas más ancha todavía (0.36, antes 0.28): Melissa pidió explícitamente que
+    # la columna de la cuenta sea más ancha para que el texto quepa completo y la tabla no quede
+    # tan extensa hacia abajo. Las 8 columnas de moneda bajan de 0.09 a 0.08 para compensar (siguen
+    # entrando números de hasta 9-10 caracteres como "(104.315)" sin problema). dynamic_row_height:
+    # antes TODAS las filas usaban el mismo alto fijo (row_h=0.42) pensado para la etiqueta más
+    # larga en 3 líneas, así que la tabla entera salía muy alta aunque casi todas las cuentas sean
+    # cortas (1 línea) — con esto cada fila mide solo lo que su propia etiqueta necesita (igual que
+    # se hizo antes para 'Riesgos'), y con col0 más ancha la mayoría de las etiquetas ya entran en
+    # 1-2 líneas en vez de 2-3, lo que además reduce el alto total de la tabla.
+    col_widths=[0.36,0.08,0.08,0.08,0.08,0.08,0.08,0.08,0.08],
     fig_w=9.5, font_size=8.0, row_h=0.42, max_lines=3,
+    dynamic_row_height=True,
  ),
 
  'EfectoTC': dict(
@@ -655,6 +690,13 @@ TABLES = {
     fig_w=7.2, row_h=0.3, font_size=8.5,
     max_lines=16, wrap_all_cols=True,
     dynamic_row_height=True, skip_empty_rows=True, justify_cols={2,3},
+    # Nombre/Descripción/Controles (ci 1,2,3) son texto libre que puede cambiar cada trimestre
+    # (redacción editada, un riesgo nuevo) — se traducen en vivo vía DeepL si hay API key
+    # configurada (ver deepl_translate.py), con el diccionario fijo de TABLES_EN['Riesgos'] como
+    # respaldo si no. Tipo (ci 0) queda SOLO en el diccionario fijo: son 5 palabras de categoría
+    # estables (Climático, Operacional, Financiero, Cumplimiento, Estratégico) que no necesitan
+    # traducción dinámica y conviene mantener siempre con la misma palabra en inglés.
+    dynamic_translate_cols={1,2,3},
  ),
 
  'Seguros': dict(
