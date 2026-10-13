@@ -129,9 +129,20 @@ tú misma desde cero — revisa el detalle del proceso (`[AVISO]`) si esto ocurr
 
 Más abajo en la misma página de la app hay una sección aparte **"🇬🇧 Versión en inglés"**:
 
-1. Sube el mismo Excel del trimestre y el Word del Análisis Razonado **en inglés** del trimestre
-   anterior (misma lógica de plantilla que la versión en español).
-2. Haz clic en **"Generar versión en inglés (Word + Excel)"**. La app entrega dos descargas:
+1. Reutiliza automáticamente el Excel que ya subiste arriba (sección en español) — no hay que
+   subirlo de nuevo. Tienes que subir el Word del Análisis Razonado **en inglés del trimestre
+   anterior**: es la misma lógica de plantilla que la versión en español (le da el
+   formato/estructura), **no** es el Word en español que acabas de generar este trimestre.
+2. **Opcional, pero recomendado:** sube también el Word en **español** que la propia app generó
+   este trimestre, ya con tus causas de negocio revisadas/completadas (resaltadas en amarillo).
+   Con esto, la app toma exactamente ese texto resaltado — la causa tal como la escribiste, más
+   cualquier otro cambio que le hayas hecho — y lo deja resaltado en el Word en inglés, en
+   español, con el aviso "SPANISH — TRANSLATE INTO ENGLISH:" en vez del aviso genérico o de la
+   causa (ya desactualizada) del Word en inglés del trimestre pasado. Solo te queda traducir esa
+   frase corta al inglés; el contenido es exactamente el mismo en los dos idiomas porque parte de
+   lo mismo que escribiste. Si no subes este Word, la sección funciona igual que siempre (ver más
+   abajo).
+3. Haz clic en **"Generar versión en inglés (Word + Excel)"**. La app entrega dos descargas:
    - El **Word en inglés** actualizado (mismas frases/tablas que la versión en español, ya
      traducidas y verificadas contra los informes en inglés de referencia).
    - Una copia del **Excel traducida al inglés**, acotada a las 18 tablas que aparecen en el Word
@@ -150,7 +161,40 @@ Más abajo en la misma página de la app hay una sección aparte **"🇬🇧 Ver
      combinan varias columnas (ej. "AÑO CALENDARIO (6 meses)" en EBITDA) quedan como texto normal
      en una sola celda en vez de centrados sobre varias columnas, para evitar que al borrar
      columnas el rango combinado quede desalineado del contenido.
-3. Revisa igual que la versión en español: texto resaltado en amarillo y el detalle del proceso.
+4. Revisa igual que la versión en español: texto resaltado en amarillo y el detalle del proceso.
+
+**Cómo funciona el traspaso de causas de negocio (sin traducción automática):** el Word en inglés
+se regenera de forma independiente a partir del Excel, igual que el de español — no es una
+traducción del Word en español, palabra por palabra. Las cifras, porcentajes y estructura del
+texto se generan solos desde el Excel en ambos idiomas por separado (y ya están verificados contra
+informes reales en inglés), pero las causas de negocio puntuales que no se pueden derivar del
+Excel (el motivo exacto de un deterioro, una provisión no recurrente, etc.) sí necesitan ser
+exactamente las mismas en los dos idiomas, porque las escribe una persona, no el Excel. Para eso:
+
+- Si subes el Word en español ya editado este trimestre (paso 2 arriba), la app lee directamente
+  el texto resaltado en amarillo de ese documento — tal como quedó, lo hayas dejado igual,
+  reescrito, o le hayas agregado algo más — y lo inserta en el lugar correspondiente del Word en
+  inglés, todavía en español, resaltado, con el aviso "SPANISH — TRANSLATE INTO ENGLISH:". Tú
+  traduces esa frase corta al inglés; el resto del párrafo (cifras, porcentajes) ya viene generado
+  correctamente en inglés.
+- Si no subes ese Word, la app intenta reconocer la causa que traía el Word en inglés del
+  trimestre anterior (igual que hacía antes) y la deja tal cual, en inglés — pero esa causa puede
+  estar desactualizada si cambió el motivo este trimestre; por eso se recomienda el paso 2.
+- En ningún caso se usa un traductor automático (ni local ni por API): mandar el texto financiero
+  de la Compañía a un servicio externo rompería la garantía de que todo se procesa en este
+  computador, y una traducción automática puede cambiar el sentido de un término técnico
+  específico. La traducción final de esa frase corta siempre la hace una persona.
+
+**Verificación extra — por si editaste algo más allá de la causa resaltada:** cuando subes el Word
+en español ya editado (paso 2), la app además compara, párrafo por párrafo, la parte que **no**
+está resaltada contra lo que el motor generaría de nuevo a partir de este mismo Excel. Si alguna
+vez cambias a mano algo fuera del resaltado amarillo —una cifra, una palabra, lo que sea—, la app
+no lo traspasa sola al inglés (insertar un fragmento recortado automáticamente en un documento
+financiero formal es arriesgado), pero sí te deja un aviso explícito en el detalle del proceso,
+con el nombre del párrafo, para que revises a mano que el Word en inglés diga lo mismo ahí. En el
+uso normal (sin tocar nada fuera de lo resaltado en amarillo) no debería aparecer ningún aviso de
+este tipo — si aparece alguno sin que hayas tocado nada, puede deberse a que Word reformateó algo
+al guardar (comillas, espacios); igual revisa el párrafo señalado para estar segura.
 
 Si la sección no aparece en tu instalación, falta copiar `ar_scripts/assemble_en.py`,
 `ar_scripts/periods_en.py`, `ar_scripts/ar_engine_en.py` y `ar_scripts/excel_translator_en.py`

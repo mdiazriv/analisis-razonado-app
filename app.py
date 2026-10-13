@@ -129,26 +129,47 @@ if not _EN_AVAILABLE:
         "La versión en inglés todavía no está instalada en esta carpeta: faltan "
         "`assemble_en.py` y/o `excel_translator_en.py` dentro de `ar_scripts/`."
     )
+elif not excel_file:
+    st.info("Sube primero el Excel del trimestre más arriba (sección en español) — esta sección lo reutiliza, no hace falta subirlo de nuevo.")
 else:
     st.caption(
-        "Sube el mismo Excel del trimestre y el Word del Análisis Razonado en INGLÉS del "
-        "trimestre anterior (sirve de plantilla de formato). La app genera el Word en inglés "
-        "actualizado y, además, una copia del Excel con las etiquetas de las tablas y las "
-        "fechas ya traducidas al inglés (mismos valores y fórmulas congeladas en sus valores "
-        "calculados; no se traduce el texto libre fuera de las tablas ni los nombres de "
-        "pestaña)."
+        f"Usando el Excel ya subido más arriba ({excel_file.name}). Sube además el Word del "
+        "Análisis Razonado en INGLÉS **del trimestre anterior** (sirve solo de plantilla de "
+        "formato — títulos, orden de secciones, estilos — igual que el Word base de la sección "
+        "en español; no es el Word en español que acabas de generar). La app genera el Word en "
+        "inglés actualizado y, además, una copia del Excel con las etiquetas de las tablas y "
+        "las fechas ya traducidas al inglés (mismos valores y fórmulas congeladas en sus "
+        "valores calculados; no se traduce el texto libre fuera de las tablas ni los nombres "
+        "de pestaña)."
     )
+    word_file_en = st.file_uploader("Word base en inglés del trimestre anterior (.docx)", type=["docx"], key="word_en")
 
-    col1_en, col2_en = st.columns(2)
-    with col1_en:
-        excel_file_en = st.file_uploader("1. Excel del trimestre (.xlsx)", type=["xlsx"], key="excel_en")
-    with col2_en:
-        word_file_en = st.file_uploader("2. Word base en inglés a actualizar (.docx)", type=["docx"], key="word_en")
+    word_file_es_edited = st.file_uploader(
+        "Opcional — Word en ESPAÑOL ya generado por esta app este trimestre, con tus ediciones (.docx)",
+        type=["docx"],
+        key="word_es_edited",
+    )
+    st.caption(
+        "Súbelo después de revisar/completar en el Word en español las causas de negocio resaltadas "
+        "en amarillo (y cualquier otro ajuste que les hayas hecho). La app toma ese mismo texto "
+        "resaltado, tal como quedó escrito, y lo deja resaltado en el Word en inglés — en español, "
+        "con el aviso \"SPANISH — TRANSLATE INTO ENGLISH\" — para que solo tengas que traducir esa "
+        "frase corta, en vez de recordarla y redactarla de cero. Así el inglés queda fiel a lo que "
+        "escribiste en español **este** trimestre, no a lo que decía el Word en inglés del trimestre "
+        "pasado. **No se traduce de forma automática**: hacerlo implicaría mandar tu texto financiero "
+        "a un servicio externo (rompiendo la garantía de que todo se procesa en este computador) y "
+        "arriesgar una mala traducción de un término técnico. Si no subes este Word, la sección "
+        "funciona igual que antes: deja el aviso genérico en inglés (o la causa del Word en inglés "
+        "anterior, si la reconoce) para que la completes tú misma ahí. Además, la app compara cada "
+        "párrafo contra lo que el Excel generaría de nuevo y te avisa en el detalle del proceso si "
+        "editaste algo a mano fuera del resaltado (una cifra, una palabra), para que revises que el "
+        "inglés diga lo mismo ahí."
+    )
 
     generate_en_clicked = st.button(
         "Generar versión en inglés (Word + Excel)",
         type="primary",
-        disabled=not (excel_file_en and word_file_en),
+        disabled=not word_file_en,
     )
 
     if generate_en_clicked:
@@ -159,13 +180,22 @@ else:
             out_excel_path_en = os.path.join(tmp_en, "Datos_EN.xlsx")
 
             with open(excel_path_en, "wb") as f:
-                f.write(excel_file_en.getbuffer())
+                f.write(excel_file.getbuffer())
             with open(word_path_en, "wb") as f:
                 f.write(word_file_en.getbuffer())
 
+            word_es_edited_path = None
+            if word_file_es_edited:
+                word_es_edited_path = os.path.join(tmp_en, "input_es_edited.docx")
+                with open(word_es_edited_path, "wb") as f:
+                    f.write(word_file_es_edited.getbuffer())
+
             with st.spinner("Generando Word en inglés..."):
                 try:
-                    log_en = assemble_en.generate_en(excel_path_en, word_path_en, out_word_path_en)
+                    log_en = assemble_en.generate_en(
+                        excel_path_en, word_path_en, out_word_path_en,
+                        word_es_edited_path=word_es_edited_path,
+                    )
                     ok_word_en = True
                 except Exception:
                     log_en = [traceback.format_exc()]
