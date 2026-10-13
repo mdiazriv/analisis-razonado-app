@@ -998,6 +998,24 @@ def update_flujo_caja_table(doc, wb, log):
     log.append(msg)
     log.append("[INFO] Flujo de Efectivo: la columna de Comentarios no se toca — complétala tú misma cada trimestre.")
 
+# Melissa subió por error, en esta misma sección (la del Word en ESPAÑOL), el Word BASE EN INGLÉS
+# del trimestre anterior — assemble.py busca sus párrafos por anclas de texto en español, así que
+# ninguna calzó, el texto narrativo quedó íntegro en inglés (tal cual venía), y solo se actualizaron
+# las tablas/imágenes (esas sí son independientes del idioma). El proceso no lanzó ninguna excepción
+# (no hay nada técnicamente "roto"), así que mostraba igual el mensaje verde de éxito, con los
+# avisos escondidos en un detalle colapsado — fácil de no notar. Este chequeo detecta ese patrón
+# (casi todas las anclas de texto fallan a la vez, algo que no pasa con un Word base real, aunque
+# tenga alguna sección reordenada) para avisar fuerte en vez de dejarlo pasar en silencio.
+def count_anchor_misses(log):
+    """Cuenta cuántas anclas de texto (título, preámbulo, encabezados de sección, frases calculadas
+    del Excel) SÍ se encontraron y actualizaron en el Word base ('[OK] Actualizado...') contra
+    cuántas NO ('[AVISO] No encontré párrafo...'). Útil para detectar, después de generar, que
+    probablemente se subió el Word equivocado (otro idioma, u otra estructura por completo) en vez
+    de fallar calladamente párrafo por párrafo."""
+    misses = sum(1 for l in log if 'No encontré párrafo' in l)
+    hits = sum(1 for l in log if l.startswith('[OK] Actualizado'))
+    return misses, hits
+
 def generate(excel_path, word_path, out_path):
     log = []
     wb = openpyxl.load_workbook(excel_path, data_only=True)
@@ -1027,6 +1045,16 @@ def generate(excel_path, word_path, out_path):
     swap_media_bytes(tmp_text_docx, out_path, image_map, log)
     os.unlink(tmp_text_docx)
     shutil.rmtree(img_dir)
+
+    misses, hits = count_anchor_misses(log)
+    if misses + hits >= 10 and misses / (misses + hits) >= 0.5:
+        log.append(
+            f"[ALERTA] De {misses + hits} frases/encabezados que la app busca por texto en el Word "
+            f"base, {misses} NO se encontraron. Esto casi siempre significa que el Word subido no es "
+            "el correcto: revisa que sea el Word en ESPAÑOL del trimestre anterior (no el de inglés, "
+            "ni otro archivo), y que mantenga la misma estructura de títulos de siempre. El documento "
+            "generado probablemente quedó con la mayor parte del texto narrativo SIN actualizar."
+        )
     return log
 
 if __name__ == '__main__':

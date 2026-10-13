@@ -74,7 +74,18 @@ plantillas ni del Excel. Ese texto se traduce vía DeepL y se inserta en el Word
 resaltado en amarillo, para que lo verifiques antes de publicar — en vez de quedar con la redacción
 del trimestre anterior sin que nadie lo notara, que era justo el problema original. Si no
 configuras DeepL, ese mismo texto queda en español, resaltado, pendiente de que lo traduzcas a
-mano — ver "Traducción en vivo (DeepL)" y "Texto libre de todo el documento" más abajo.
+mano — ver "Traducción en vivo (DeepL)" y "Texto libre de todo el documento" más abajo. Esa
+comparación no traduce línea por línea sin más: cada párrafo libre se compara contra ese mismo
+párrafo en el Word en español del **trimestre anterior**, y solo se traduce lo que de verdad
+cambió (ver esa misma sección).
+
+**Alerta de "Word equivocado":** si subes sin querer el Word en el idioma o archivo incorrecto (por
+ejemplo, el Word en inglés en la sección en español), antes la app lo procesaba igual —actualizaba
+las tablas (que no dependen del idioma) pero no encontraba ninguno de los párrafos de texto por
+buscarlos con anclas en el idioma equivocado— y mostraba el mensaje verde de éxito de todos modos,
+con los avisos escondidos en un detalle colapsado, fácil de no notar. Ahora, si casi ninguna ancla
+de texto calzó, la app muestra una alerta amarilla bien visible ("probablemente a partir del Word
+equivocado") y abre el detalle del proceso automáticamente, en vez de dejarlo pasar en silencio.
 
 ## Instalación (una sola vez)
 

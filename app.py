@@ -123,8 +123,18 @@ if generate_clicked:
 
 result = st.session_state.get("es_result")
 if result:
+    log = result["log"]
+    alertas = [l for l in log if l.startswith("[ALERTA]")]
+
     if result["ok"] and result["data"]:
-        st.success("Documento generado correctamente.")
+        if alertas:
+            st.warning(
+                "⚠️ El documento se generó, pero probablemente a partir del Word equivocado: "
+                "casi todo el texto narrativo quedó SIN actualizar (revisa el detalle abajo antes "
+                "de usar este archivo)."
+            )
+        else:
+            st.success("Documento generado correctamente.")
         st.download_button(
             "⬇️ Descargar Word actualizado",
             data=result["data"],
@@ -135,13 +145,15 @@ if result:
     else:
         st.error("Hubo un error generando el documento. Revisa el detalle abajo.")
 
-    with st.expander("Ver detalle del proceso (qué se actualizó, avisos y errores)", expanded=not result["ok"]):
-        log = result["log"]
+    with st.expander("Ver detalle del proceso (qué se actualizó, avisos y errores)", expanded=not result["ok"] or bool(alertas)):
         avisos = [l for l in log if l.startswith("[AVISO]")]
         errores = [l for l in log if l.startswith("[ERROR]") or "Traceback" in l]
         oks = [l for l in log if l.startswith("[OK]")]
         infos = [l for l in log if l.startswith("[INFO]")]
 
+        if alertas:
+            st.markdown("**⚠️ Posible Word equivocado:**")
+            st.code("\n".join(alertas))
         if infos:
             st.write("\n".join(infos))
         if errores:
@@ -304,8 +316,18 @@ else:
 
     en_results = st.session_state.get("en_results")
     if en_results:
+        log_en = en_results["log_en"]
+        alertas_en = [l for l in log_en if l.startswith("[ALERTA]")]
+
         if en_results["ok_word_en"] and en_results["data_word_en"]:
-            st.success("Word en inglés generado correctamente.")
+            if alertas_en:
+                st.warning(
+                    "⚠️ El Word en inglés se generó, pero probablemente a partir del Word base "
+                    "equivocado: casi todo el texto narrativo quedó SIN actualizar (revisa el "
+                    "detalle abajo antes de usar este archivo)."
+                )
+            else:
+                st.success("Word en inglés generado correctamente.")
             st.download_button(
                 "⬇️ Descargar Word en inglés",
                 data=en_results["data_word_en"],
@@ -330,13 +352,15 @@ else:
 
         with st.expander(
             "Ver detalle del proceso (Word + Excel en inglés)",
-            expanded=not (en_results["ok_word_en"] and en_results["ok_excel_en"]),
+            expanded=not (en_results["ok_word_en"] and en_results["ok_excel_en"]) or bool(alertas_en),
         ):
             st.markdown("**Word en inglés:**")
-            log_en = en_results["log_en"]
             avisos_en = [l for l in log_en if l.startswith("[AVISO]")]
             errores_en = [l for l in log_en if l.startswith("[ERROR]") or "Traceback" in l]
             oks_en = [l for l in log_en if l.startswith("[OK]")]
+            if alertas_en:
+                st.markdown("_⚠️ Posible Word base equivocado:_")
+                st.code("\n".join(alertas_en))
             if errores_en:
                 st.markdown("_Errores:_")
                 st.code("\n".join(errores_en))

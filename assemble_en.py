@@ -1051,6 +1051,20 @@ def generate_en(excel_path, word_path, out_path, word_es_edited_path, word_es_ba
     swap_media_bytes(tmp_text_docx, out_path, image_map, log)
     os.unlink(tmp_text_docx)
     shutil.rmtree(img_dir)
+
+    # Mismo chequeo que assemble.count_anchor_misses, para el lado en inglés: si casi ninguna ancla
+    # de texto calzó (ej. porque se subió por error el Word en ESPAÑOL como "Word base en inglés del
+    # trimestre anterior"), avisar fuerte en vez de dejarlo pasar con el texto narrativo sin traducir.
+    misses = sum(1 for l in log if 'No encontré párrafo' in l)
+    hits = sum(1 for l in log if l.startswith('[OK] (EN) Actualizado'))
+    if misses + hits >= 10 and misses / (misses + hits) >= 0.5:
+        log.append(
+            f"[ALERTA] (EN) De {misses + hits} frases/encabezados que la app busca por texto en el "
+            f"Word base en inglés, {misses} NO se encontraron. Esto casi siempre significa que el "
+            "Word subido en 'Word base en inglés del trimestre anterior' no es el correcto (revisa "
+            "que esté en inglés y mantenga la misma estructura de siempre) — el documento generado "
+            "probablemente quedó con la mayor parte del texto narrativo sin actualizar."
+        )
     return log
 
 if __name__ == '__main__':
