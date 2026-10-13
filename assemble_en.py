@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import ar_engine_en as E
 import periods_en as P
 import assemble as ASM_ES  # motor en español: se reutiliza collect_causes_by_highlight (ver generate_en)
+import deepl_translate as DT  # traducción general de texto libre (ver translate_free_text_from_definitive_es)
 
 MARK_RE = re.compile(r'\[\[([^\]]+)\]\]|\{\{([^}]+)\}\}')
 
@@ -789,7 +790,237 @@ def remove_stale_risk_table_en(doc, log):
             "el detalle real de riesgos ya lo muestra la imagen traducida más abajo en el documento."
         )
 
-def generate_en(excel_path, word_path, out_path, word_es_edited_path=None):
+# ---------- Traducción general de texto libre (todo el documento), vía DeepL ----------
+# A diferencia de los TEMPLATES de arriba (frases calculadas desde el Excel) y de las CAUSAS DE
+# NEGOCIO (frases puntuales resaltadas a mano, ver _merge_causes_from_edited_es), esto cubre TODO
+# lo demás: cualquier párrafo del documento que no sea ni una plantilla reconocida ni una viñeta de
+# bridge, y que por lo tanto solo exista porque alguien lo escribió a mano directamente en el Word
+# (el título, algunos subtítulos de sección, y sobre todo el bloque largo de factores de riesgo /
+# seguros / valor justo de la fruta). Antes de esto, esos párrafos quedaban tal cual venían en el
+# Word BASE en inglés — es decir, con la redacción del TRIMESTRE ANTERIOR — que es justo lo que
+# Melissa reportó como "el texto en inglés no está quedando exactamente igual al español" y pidió
+# resolver de forma general, no solo para la tabla de Riesgos: "la traducción no es solo de riesgos
+# ... la app debe comparar la versión en español definitiva con la versión en inglés, identificar
+# las variaciones y proponer traducciones (dejar destacado), para que el usuario verifique", "todo
+# el documento, párrafo por párrafo".
+#
+# Mecánica: se clasifica cada párrafo de AMBOS documentos (el Word en español DEFINITIVO de este
+# trimestre, y este mismo Word en inglés ya generado) como "cubierto" (calza con una ancla de
+# SINGLE_TEMPLATES/HEADER_TEMPLATES, o es una viñeta de bridge) o "libre" (todo lo demás). Los
+# párrafos libres consecutivos forman "tramos"; se verificó a mano, contra los Word reales de junio
+# 2026, que español e inglés producen la MISMA cantidad de tramos libres, en el MISMO orden y con la
+# MISMA cantidad de párrafos por tramo — por eso se alinean por POSICIÓN ORDINAL (el tramo libre
+# n-ésimo en español corresponde al tramo libre n-ésimo en inglés), sin intentar adivinar por
+# contenido. Si en algún trimestre futuro la cantidad no calza (p. ej. porque se agregó o se borró un
+# párrafo de redacción libre en alguno de los dos idiomas), se alinean los primeros tramos en común y
+# se deja un [AVISO] para que se revise a mano el resto — nunca se inventa una alineación.
+#
+# Cada párrafo libre en español se traduce vía DeepL y reemplaza el texto del párrafo libre
+# correspondiente en inglés, resaltado en amarillo y con una etiqueta que dice que es una propuesta
+# de traducción pendiente de verificar (igual que el resto de los resaltados de este motor, nunca se
+# publica una traducción automática sin que la persona la revise). Si DeepL no está configurado (o
+# falla para un párrafo puntual), se deja el texto en ESPAÑOL tal cual, resaltado, con una etiqueta
+# que pide traducirlo a mano — mejor eso que dejar la redacción vieja del trimestre anterior sin
+# avisar que quedó desactualizada.
+
+def _has_image(p):
+    return any(el.tag.endswith('}blip') for el in p._p.iter())
+
+def _classify_free_runs(doc, anchor_regexes, is_list_fn):
+    """Agrupa los párrafos de `doc` en tramos consecutivos de texto NO cubierto por ninguna ancla de
+    `anchor_regexes` (ya compiladas) ni reconocido como viñeta por `is_list_fn`. Los párrafos vacíos
+    y los que solo contienen una imagen cortan el tramo (no cuentan como cubiertos ni como libres)."""
+    runs = []
+    cur = []
+    for p in doc.paragraphs:
+        t = p.text.strip()
+        if not t or _has_image(p):
+            if cur:
+                runs.append(cur); cur = []
+            continue
+        if is_list_fn(p) or any(rx.search(t) for rx in anchor_regexes):
+            if cur:
+                runs.append(cur); cur = []
+            continue
+        cur.append(p)
+    if cur:
+        runs.append(cur)
+    return runs
+
+DEEPL_PROPOSAL_PREFIX_EN = "DeepL translation — please verify: "
+NO_DEEPL_PREFIX_EN = "SPANISH — DeepL not configured, translate manually: "
+
+_DIFF_WS_RE = re.compile(r'\s+')
+
+def _normalize_for_diff(s):
+    """Normaliza un texto para compararlo contra el mismo párrafo del trimestre anterior: nunca se
+    quiere traducir de nuevo (ni marcar como 'cambió') algo que solo difiere en un espacio doble, una
+    comilla tipográfica vs. recta, o un salto de línea — ruido típico de guardar en Word, no un
+    cambio real de redacción."""
+    if s is None:
+        return ''
+    s = s.replace('’', "'").replace('‘', "'").replace('“', '"').replace('”', '"')
+    s = s.replace('\xa0', ' ')
+    return _DIFF_WS_RE.sub(' ', s.strip())
+
+def _sanitize_for_markup(s):
+    """set_paragraph_text usa [[...]] para resaltar en amarillo: si el contenido en sí trae un
+    corchete suelto (del español original o de la traducción de DeepL), rompe ese parseo y el
+    párrafo queda sin resaltar, con los corchetes de marcado visibles como texto literal. Para
+    evitarlo, cualquier corchete que traiga el contenido se cambia por paréntesis antes de
+    envolverlo en [[...]] — no se pierde información, solo el tipo de signo."""
+    return s.replace('[', '(').replace(']', ')')
+
+def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_base_path, log):
+    """Ver docstring de la sección de arriba. doc_en: el Word en inglés YA generado, después de
+    aplicar templates/causas/bridge/flujo de caja/limpieza de la tabla de riesgos obsoleta (así los
+    tramos "libres" que se detectan acá son de verdad solo lo que ninguna otra lógica tocó).
+    word_es_edited_path: ruta al Word en español definitivo de este trimestre (obligatorio, ver
+    generate_en). word_es_base_path: ruta al Word en ESPAÑOL del trimestre ANTERIOR (el mismo
+    'Word base a actualizar' que ya se sube en la sección en español de la app — no hace falta
+    subirlo de nuevo acá) — se usa como punto de comparación.
+
+    A pedido explícito de Melissa, esto NO traduce línea por línea sin más: compara, párrafo por
+    párrafo, el texto libre de ESTE trimestre contra el de ese mismo párrafo en el Word en español
+    del trimestre ANTERIOR, y **solo** manda a traducir los párrafos que de verdad cambiaron. Un
+    párrafo libre sin cambios de redacción respecto al trimestre pasado se deja tal cual está en el
+    Word en inglés (su traducción ya fue aprobada y usada en informes anteriores; no hay razón para
+    reemplazarla por una traducción nueva de DeepL, que podría usar una redacción distinta aunque
+    diga lo mismo). Si no se puede comparar (no se subió el Word en español anterior, no abre, o la
+    cantidad de párrafos de ese tramo no calza entre los dos trimestres), se trata ese párrafo como
+    'cambiado' y se traduce de todos modos — mejor eso que dejar pasar un cambio real sin avisar."""
+    try:
+        doc_es = docx.Document(word_es_edited_path)
+    except Exception as ex:
+        log.append(f"[ERROR] (EN) No pude abrir el Word en español definitivo para la traducción general de texto libre: {ex}")
+        return
+
+    anchors_es = [re.compile(a) for a, _ in ASM_ES.SINGLE_TEMPLATES] + [re.compile(a) for a, _ in ASM_ES.HEADER_TEMPLATES]
+    anchors_en = [re.compile(a) for a, _ in SINGLE_TEMPLATES_EN] + [re.compile(a) for a, _ in HEADER_TEMPLATES_EN]
+
+    runs_es = _classify_free_runs(doc_es, anchors_es, ASM_ES._is_list_para)
+    runs_en = _classify_free_runs(doc_en, anchors_en, _is_list_para)
+
+    n_es, n_en = len(runs_es), len(runs_en)
+    n_common = min(n_es, n_en)
+    if n_es != n_en:
+        log.append(
+            f"[AVISO] (EN) La cantidad de tramos de texto libre no calzó entre el Word en español "
+            f"definitivo ({n_es} tramos) y el Word en inglés generado ({n_en} tramos): se alinearon "
+            f"los primeros {n_common} tramos en el mismo orden en que aparecen en cada documento. "
+            "Revisa a mano el resto del documento en inglés (puede deberse a un párrafo nuevo, "
+            "borrado o fusionado en alguno de los dos idiomas este trimestre)."
+        )
+
+    # Punto de comparación: el mismo texto libre, pero del Word en español del trimestre ANTERIOR
+    # (runs_es_prev), alineado por posición ordinal exactamente igual que runs_es con runs_en. Si no
+    # se puede abrir o no se pasó la ruta, runs_es_prev queda vacío y todo se trata como 'cambiado'
+    # (se traduce igual que antes de este ajuste).
+    runs_es_prev = []
+    if word_es_base_path:
+        try:
+            doc_es_prev = docx.Document(word_es_base_path)
+            runs_es_prev = _classify_free_runs(doc_es_prev, anchors_es, ASM_ES._is_list_para)
+        except Exception as ex:
+            log.append(
+                "[AVISO] (EN) No pude abrir el Word en español del trimestre anterior para comparar "
+                f"qué texto libre cambió: {ex}. Se tratará todo el texto libre como 'cambiado' (se "
+                "traduce igual que si no hubiera punto de comparación)."
+            )
+    else:
+        log.append(
+            "[AVISO] (EN) No tengo el Word en español del trimestre anterior para comparar (sube el "
+            "'Word base a actualizar' en la sección en español de arriba): se tratará todo el texto "
+            "libre como 'cambiado' y se traducirá por completo, en vez de traducir solo lo que varió."
+        )
+
+    deepl_on = DT.is_configured()
+    n_translated = 0
+    n_fallback = 0
+    n_unchanged = 0
+    n_paras_mismatch = 0
+    n_runs_no_prev = 0
+
+    for run_idx in range(n_common):
+        es_paras = runs_es[run_idx]
+        en_paras = runs_en[run_idx]
+        if len(es_paras) != len(en_paras):
+            n_paras_mismatch += 1
+
+        prev_paras = runs_es_prev[run_idx] if run_idx < len(runs_es_prev) else None
+        if prev_paras is None:
+            n_runs_no_prev += 1
+        prev_has_same_count = prev_paras is not None and len(prev_paras) == len(es_paras)
+
+        new_texts = []
+        for k, p_es in enumerate(es_paras):
+            es_text = p_es.text.strip()
+            prev_text = prev_paras[k].text.strip() if prev_has_same_count else None
+            unchanged = prev_text is not None and _normalize_for_diff(es_text) == _normalize_for_diff(prev_text)
+
+            if unchanged:
+                new_texts.append(None)  # None = no tocar este párrafo en inglés
+                n_unchanged += 1
+                continue
+
+            translated = DT.translate_es_en(es_text) if deepl_on else None
+            if translated:
+                new_texts.append(f"[[{DEEPL_PROPOSAL_PREFIX_EN}{_sanitize_for_markup(translated)}]]")
+                n_translated += 1
+            else:
+                new_texts.append(f"[[{NO_DEEPL_PREFIX_EN}{_sanitize_for_markup(es_text)}]]")
+                n_fallback += 1
+
+        if len(es_paras) == len(en_paras) and all(t is None for t in new_texts):
+            continue  # todo el tramo quedó sin cambios: no tocar nada en inglés
+        # _replace_list_items regenera cada párrafo que recibe texto; para los que quedaron en None
+        # (sin cambios) se reutiliza su propio texto actual tal cual, para no tocarlos.
+        final_texts = [
+            (new_texts[k] if k < len(new_texts) and new_texts[k] is not None else en_paras[min(k, len(en_paras) - 1)].text)
+            for k in range(len(new_texts))
+        ]
+        _replace_list_items(en_paras, final_texts)
+
+    if n_common:
+        msg = (
+            f"[OK] (EN) Texto libre (no cubierto por plantillas ni causas de negocio) comparado contra "
+            f"el Word en español definitivo en {n_common} tramo(s): {n_unchanged} párrafo(s) sin "
+            f"cambios respecto al trimestre anterior (se dejó el inglés tal cual estaba), "
+            f"{n_translated} traducido(s) vía DeepL por haber cambiado"
+        )
+        if n_fallback:
+            msg += f", {n_fallback} dejado(s) en español pendiente de traducir a mano (cambiaron, pero DeepL no está configurado o falló esa traducción puntual)"
+        msg += ". Lo traducido queda resaltado en amarillo para que lo verifiques antes de publicar."
+        log.append(msg)
+        if not deepl_on and (n_translated or n_fallback):
+            log.append(
+                "[AVISO] (EN) DeepL no está configurado (falta DEEPL_API_KEY en los Secrets de la app): "
+                "el texto libre que sí cambió respecto al trimestre anterior quedó en español, "
+                "resaltado, pendiente de traducir a mano."
+            )
+    else:
+        log.append("[AVISO] (EN) No encontré ningún tramo de texto libre para comparar/traducir.")
+    if n_paras_mismatch:
+        log.append(
+            f"[AVISO] (EN) {n_paras_mismatch} de los {n_common} tramos alineados tenían distinta "
+            "cantidad de párrafos entre español e inglés (se agregaron o quitaron párrafos en inglés "
+            "para que calce la cantidad) — revisa esos tramos con más atención."
+        )
+    if n_runs_no_prev and runs_es_prev:
+        log.append(
+            f"[AVISO] (EN) {n_runs_no_prev} de los {n_common} tramos de texto libre no tenían un tramo "
+            "correspondiente en el Word en español del trimestre anterior con la misma cantidad de "
+            "párrafos (posiblemente texto nuevo este trimestre): se tradujeron por completo, sin "
+            "poder comparar qué parte específica cambió."
+        )
+
+def generate_en(excel_path, word_path, out_path, word_es_edited_path, word_es_base_path=None):
+    if not word_es_edited_path:
+        raise ValueError(
+            "word_es_edited_path es obligatorio: hace falta el Word en español definitivo de este "
+            "trimestre (ya revisado/editado) para generar el inglés — se usa tanto para las causas de "
+            "negocio como para proponer la traducción del resto del texto libre del documento."
+        )
     log = []
     wb = openpyxl.load_workbook(excel_path, data_only=True)
     periods = P.derive_periods_en(wb)
@@ -801,14 +1032,14 @@ def generate_en(excel_path, word_path, out_path, word_es_edited_path=None):
     old_periods = P.derive_old_periods_from_title_en(_title_para.text) if _title_para is not None else None
 
     causes = collect_original_causes(doc, log)
-    if word_es_edited_path:
-        _merge_causes_from_edited_es(causes, wb, word_es_edited_path, log)
+    _merge_causes_from_edited_es(causes, wb, word_es_edited_path, log)
     apply_header_templates(doc, periods, log)
     apply_single_templates(doc, wb, periods, causes, log)
     apply_bridge_bullets(doc, wb, periods, causes, log)
     apply_global_sweep(doc, old_periods, periods, log)
     update_flujo_caja_table_en(doc, wb, log)
     remove_stale_risk_table_en(doc, log)
+    translate_free_text_from_definitive_es(doc, word_es_edited_path, word_es_base_path, log)
 
     image_map, img_dir = collect_and_render_tables_en(wb, word_path, log, doc=doc)
     from assemble import fix_image_frame_sizes, swap_media_bytes
@@ -823,6 +1054,7 @@ def generate_en(excel_path, word_path, out_path, word_es_edited_path=None):
     return log
 
 if __name__ == '__main__':
-    excel_path, word_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
-    log = generate_en(excel_path, word_path, out_path)
+    excel_path, word_path, out_path, word_es_edited_path = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+    word_es_base_path = sys.argv[5] if len(sys.argv) > 5 else None
+    log = generate_en(excel_path, word_path, out_path, word_es_edited_path, word_es_base_path)
     print('\n'.join(log))

@@ -10,11 +10,14 @@ Cada trimestre: subir el Excel con los datos financieros del trimestre y el Word
 Análisis Razonado del trimestre ANTERIOR (que sirve de plantilla de formato), y descargar
 el Word actualizado. Todo el procesamiento ocurre en este computador; ningún archivo se
 envía a servidores externos — con UNA excepción, opcional y desactivada por defecto: si se
-configura una API key de DeepL (ver "Secrets" de Streamlit Cloud / variable DEEPL_API_KEY), el
-texto de la tabla de Riesgos críticos en la versión en inglés se traduce en vivo mandando ese
-texto puntual a los servidores de DeepL (a pedido explícito de Melissa, para que la traducción
-no quede pegada a la de un trimestre anterior). Sin esa API key configurada, nada cambia: la app
-sigue funcionando 100% local, igual que antes.
+configura una API key de DeepL (ver "Secrets" de Streamlit Cloud / variable DEEPL_API_KEY), la
+versión en inglés traduce en vivo, mandándolo a los servidores de DeepL: el texto de la tabla de
+Riesgos críticos, y (al generar la versión en inglés) todo el texto libre del documento que no
+salga de las plantillas ni del Excel — comparando párrafo por párrafo el Word en español
+DEFINITIVO de este trimestre contra el Word en inglés recién generado (a pedido explícito de
+Melissa, para que la traducción no quede pegada a la de un trimestre anterior). Sin esa API key
+configurada, nada cambia salvo que ese texto libre queda en español, resaltado, pendiente de que
+la persona lo traduzca a mano: la app sigue funcionando 100% local, igual que antes.
 """
 import os
 import sys
@@ -42,9 +45,10 @@ try:
 except ImportError:
     _EN_AVAILABLE = False
 
-# Traducción dinámica (DeepL) de la tabla de Riesgos en inglés — opcional y desactivada por
-# defecto. Se activa SOLO si configuraste la API key en "Secrets" de Streamlit Cloud (Settings →
-# Secrets de tu app) así:
+# Traducción dinámica (DeepL) — tabla de Riesgos críticos Y, al generar la versión en inglés, todo
+# el texto libre del documento no cubierto por las plantillas/Excel (ver assemble_en.
+# translate_free_text_from_definitive_es) — opcional y desactivada por defecto. Se activa SOLO si
+# configuraste la API key en "Secrets" de Streamlit Cloud (Settings → Secrets de tu app) así:
 #     DEEPL_API_KEY = "tu-api-key-aquí"
 # Sin esa key, _DEEPL_ON queda en False y la app sigue funcionando exactamente igual que antes
 # (con el diccionario fijo de traducciones como respaldo) — ver deepl_translate.py.
@@ -184,47 +188,45 @@ else:
     word_file_en = st.file_uploader("Word base en inglés del trimestre anterior (.docx)", type=["docx"], key="word_en")
 
     word_file_es_edited = st.file_uploader(
-        "Opcional — Word en ESPAÑOL ya generado por esta app este trimestre, con tus ediciones (.docx)",
+        "Obligatorio — Word en ESPAÑOL **definitivo** de este trimestre, ya revisado y editado (.docx)",
         type=["docx"],
         key="word_es_edited",
     )
     st.caption(
-        "Súbelo después de revisar/completar en el Word en español las causas de negocio resaltadas "
-        "en amarillo (y cualquier otro ajuste que les hayas hecho). La app toma ese mismo texto "
-        "resaltado, tal como quedó escrito, y lo deja resaltado en el Word en inglés — en español, "
-        "con el aviso \"SPANISH — TRANSLATE INTO ENGLISH\" — para que solo tengas que traducir esa "
-        "frase corta, en vez de recordarla y redactarla de cero. Así el inglés queda fiel a lo que "
-        "escribiste en español **este** trimestre, no a lo que decía el Word en inglés del trimestre "
-        "pasado. **Esta frase puntual no se traduce de forma automática**: hacerlo implicaría mandar "
-        "tu texto financiero a un servicio externo y arriesgar una mala traducción de un término "
-        "técnico — a diferencia de la tabla de Riesgos más abajo, aquí no hay diccionario fijo "
-        "posible (el texto es libre y distinto cada vez), así que se deja para que tú la traduzcas. "
-        "Si no subes este Word, la sección "
-        "funciona igual que antes: deja el aviso genérico en inglés (o la causa del Word en inglés "
-        "anterior, si la reconoce) para que la completes tú misma ahí. Además, la app compara cada "
-        "párrafo contra lo que el Excel generaría de nuevo y te avisa en el detalle del proceso si "
-        "editaste algo a mano fuera del resaltado (una cifra, una palabra), para que revises que el "
-        "inglés diga lo mismo ahí."
+        "Súbelo después de dejar listo el Word en español definitivo de este trimestre (causas de "
+        "negocio completadas, y cualquier otro ajuste de redacción ya hecho). Es obligatorio porque "
+        "la app lo usa de dos formas: (1) toma las causas de negocio resaltadas en amarillo tal como "
+        "quedaron escritas, y (2) compara **todo el documento, párrafo por párrafo**, contra ese "
+        "mismo párrafo en el Word en español del **trimestre anterior** (el que subiste arriba, en "
+        "la sección en español) — no traduce todo de nuevo cada vez: solo el texto libre en español "
+        "(título, subtítulos, y sobre todo el bloque de factores de riesgo / seguros / valor justo "
+        "de la fruta) que realmente **cambió** respecto al trimestre pasado se marca y se propone una "
+        "traducción al inglés, resaltada en amarillo, para que la verifiques. El texto libre que no "
+        "cambió se deja tal cual está en el Word en inglés — su traducción ya fue usada y aprobada "
+        "antes, así que no hay razón para reemplazarla."
     )
 
     if _DEEPL_ON:
         st.caption(
-            "🌐 Traducción en vivo vía DeepL activada: el texto de la tabla de Riesgos críticos se "
-            "traduce mandando ese texto puntual a los servidores de DeepL, en vez de usar la "
-            "traducción fija de un trimestre anterior."
+            "🌐 Traducción en vivo vía DeepL activada: el texto libre que cambió este trimestre (y el "
+            "de la tabla de Riesgos críticos) se traduce mandándolo a los servidores de DeepL, en vez "
+            "de dejarlo en español pendiente de traducir a mano."
         )
     else:
         st.caption(
             "Traducción en vivo vía DeepL: desactivada (no hay API key configurada en \"Secrets\" "
-            "de Streamlit Cloud). La tabla de Riesgos usa la traducción fija guardada; si el texto "
-            "en español cambió este trimestre, revisa que el inglés siga calzando."
+            "de Streamlit Cloud). El texto libre que cambió este trimestre queda en español, "
+            "resaltado, pendiente de que tú lo traduzcas a mano; la tabla de Riesgos usa su "
+            "traducción fija guardada."
         )
 
     generate_en_clicked = st.button(
         "Generar versión en inglés (Word + Excel)",
         type="primary",
-        disabled=not word_file_en,
+        disabled=not (word_file_en and word_file_es_edited),
     )
+    if word_file_en and not word_file_es_edited:
+        st.caption("⚠️ Falta subir el Word en español definitivo de este trimestre (obligatorio) para poder generar el inglés.")
 
     if generate_en_clicked:
         with tempfile.TemporaryDirectory() as tmp_en:
@@ -238,17 +240,25 @@ else:
             with open(word_path_en, "wb") as f:
                 f.write(word_file_en.getbuffer())
 
-            word_es_edited_path = None
-            if word_file_es_edited:
-                word_es_edited_path = os.path.join(tmp_en, "input_es_edited.docx")
-                with open(word_es_edited_path, "wb") as f:
-                    f.write(word_file_es_edited.getbuffer())
+            word_es_edited_path = os.path.join(tmp_en, "input_es_edited.docx")
+            with open(word_es_edited_path, "wb") as f:
+                f.write(word_file_es_edited.getbuffer())
+
+            # El "Word base a actualizar" en español (sección en español, arriba) sirve de punto de
+            # comparación para saber qué texto libre cambió este trimestre (ver assemble_en.
+            # translate_free_text_from_definitive_es): si no se subió, la app igual funciona, pero
+            # traduce todo el texto libre en vez de solo lo que cambió (se avisa en el detalle).
+            word_es_base_path = None
+            if word_file:
+                word_es_base_path = os.path.join(tmp_en, "input_es_base.docx")
+                with open(word_es_base_path, "wb") as f:
+                    f.write(word_file.getbuffer())
 
             with st.spinner("Generando Word en inglés..."):
                 try:
                     log_en = assemble_en.generate_en(
                         excel_path_en, word_path_en, out_word_path_en,
-                        word_es_edited_path=word_es_edited_path,
+                        word_es_edited_path, word_es_base_path,
                     )
                     ok_word_en = True
                 except Exception:

@@ -63,7 +63,18 @@ los informes reales de septiembre y diciembre.
 - **Traducción en vivo de la tabla de Riesgos (DeepL):** a pedido explícito de Melissa, aceptando
   el trade-off de que ese texto puntual sale hacia un servicio externo. Queda **desactivada por
   defecto** (si no configuras la API key, la app sigue funcionando igual que antes, 100% local) —
-  ver "Traducción en vivo de Riesgos (DeepL)" más abajo para cómo activarla.
+  ver "Traducción en vivo (DeepL)" más abajo para cómo activarla.
+
+**Últimos ajustes (ronda 3, reportados por Melissa):** la traducción no se quedó solo en la tabla
+de Riesgos — ahora, al generar la versión en inglés, la app compara **todo el documento, párrafo
+por párrafo**, contra el Word en español **definitivo** de este trimestre (subirlo ahora es
+**obligatorio**, ya no opcional) y detecta cualquier texto libre (título, subtítulos de sección, y
+sobre todo el bloque de factores de riesgo / seguros / valor justo de la fruta) que no salga de las
+plantillas ni del Excel. Ese texto se traduce vía DeepL y se inserta en el Word en inglés,
+resaltado en amarillo, para que lo verifiques antes de publicar — en vez de quedar con la redacción
+del trimestre anterior sin que nadie lo notara, que era justo el problema original. Si no
+configuras DeepL, ese mismo texto queda en español, resaltado, pendiente de que lo traduzcas a
+mano — ver "Traducción en vivo (DeepL)" y "Texto libre de todo el documento" más abajo.
 
 ## Instalación (una sola vez)
 
@@ -229,24 +240,20 @@ traducción del Word en español, palabra por palabra. Las cifras, porcentajes y
 texto se generan solos desde el Excel en ambos idiomas por separado (y ya están verificados contra
 informes reales en inglés), pero las causas de negocio puntuales que no se pueden derivar del
 Excel (el motivo exacto de un deterioro, una provisión no recurrente, etc.) sí necesitan ser
-exactamente las mismas en los dos idiomas, porque las escribe una persona, no el Excel. Para eso:
+exactamente las mismas en los dos idiomas, porque las escribe una persona, no el Excel. Por eso,
+subir el Word en español **definitivo** de este trimestre (paso 2 arriba) es **obligatorio** para
+generar la versión en inglés:
 
-- Si subes el Word en español ya editado este trimestre (paso 2 arriba), la app lee directamente
-  el texto resaltado en amarillo de ese documento — tal como quedó, lo hayas dejado igual,
-  reescrito, o le hayas agregado algo más — y lo inserta en el lugar correspondiente del Word en
-  inglés, todavía en español, resaltado, con el aviso "SPANISH — TRANSLATE INTO ENGLISH:". Tú
-  traduces esa frase corta al inglés; el resto del párrafo (cifras, porcentajes) ya viene generado
-  correctamente en inglés.
-- Si no subes ese Word, la app intenta reconocer la causa que traía el Word en inglés del
-  trimestre anterior (igual que hacía antes) y la deja tal cual, en inglés — pero esa causa puede
-  estar desactualizada si cambió el motivo este trimestre; por eso se recomienda el paso 2.
-- Para esta frase puntual no se usa un traductor automático: mandar el texto financiero de la
-  Compañía a un servicio externo rompería la garantía de que todo se procesa en este computador, y
-  una traducción automática puede cambiar el sentido de un término técnico específico. La
-  traducción final de esa frase corta siempre la hace una persona. (La tabla de Riesgos sí puede
-  traducirse en vivo vía DeepL si configuras una API key — ver "Traducción en vivo de Riesgos
-  (DeepL)" más abajo — porque ahí el texto siempre sigue la misma estructura de 4 columnas y es
-  más seguro automatizarlo.)
+- La app lee directamente el texto resaltado en amarillo de ese documento — tal como quedó, lo
+  hayas dejado igual, reescrito, o le hayas agregado algo más — y lo inserta en el lugar
+  correspondiente del Word en inglés. Sin DeepL configurado, queda todavía en español, resaltado,
+  con el aviso "SPANISH — TRANSLATE INTO ENGLISH:", para que tú traduzcas esa frase corta (el resto
+  del párrafo — cifras, porcentajes — ya viene generado correctamente en inglés). Con DeepL
+  configurado, la tabla de Riesgos sí se traduce en vivo (ver "Traducción en vivo (DeepL)" más
+  abajo); las causas de negocio puntuales, por ahora, siguen quedando para que las traduzcas tú,
+  porque ahí un término técnico mal traducido es más riesgoso.
+- Ese mismo Word definitivo también se usa para la traducción general de texto libre (ver "Texto
+  libre de todo el documento" más abajo).
 
 **Verificación extra — por si editaste algo más allá de la causa resaltada:** cuando subes el Word
 en español ya editado (paso 2), la app además compara, párrafo por párrafo, la parte que **no**
@@ -263,40 +270,81 @@ Si la sección no aparece en tu instalación, falta copiar `ar_scripts/assemble_
 `ar_scripts/periods_en.py`, `ar_scripts/ar_engine_en.py` y `ar_scripts/excel_translator_en.py`
 (ya incluidos en este zip) a tu carpeta de la app.
 
-### Traducción en vivo de Riesgos (DeepL) — opcional, desactivada por defecto
+### Texto libre de todo el documento (comparación con el Word en español definitivo)
+
+Además de las tablas y las causas de negocio, el Word trae texto que no sale ni del Excel ni de
+ninguna plantilla de este motor: el título, algunos subtítulos de sección y, sobre todo, el bloque
+largo de factores de riesgo / seguros / valor justo de la fruta (unos 70 párrafos). Antes, ese
+texto quedaba tal cual venía en el Word en inglés **base** que subes — es decir, con la redacción
+del **trimestre anterior** — sin ningún aviso de que podía estar desactualizado. Esto es justo lo
+que reportaste: "la traducción no es solo de riesgos ... la app debe comparar la versión en
+español definitiva con la versión en inglés, identificar las variaciones y proponer traducciones
+(dejar destacado), para que el usuario verifique".
+
+Ahora, al generar la versión en inglés, la app recorre **todo el documento, párrafo por párrafo**,
+y clasifica cada uno como "cubierto" (viene de una plantilla, de una causa de negocio, o es una
+viñeta de bridge) o "libre" (todo lo demás). Hace lo mismo con el Word en español **definitivo**
+que subiste (obligatorio, ver más arriba) y empareja los tramos de texto libre de uno y otro
+documento por el orden en que aparecen — se verificó contra los Word reales de junio 2026 que
+español e inglés traen la misma cantidad de tramos libres, en el mismo orden.
+
+**Importante: esto no traduce línea por línea sin más.** Cada párrafo libre en español se compara,
+uno por uno, contra ese mismo párrafo en el Word en español del **trimestre anterior** (el "Word
+base a actualizar" que ya subes en la sección en español, arriba — no hace falta subirlo de nuevo
+acá). Si el texto es el mismo (ignorando espacios/comillas tipográficas sueltas), el párrafo en
+inglés se deja **tal cual está** — su traducción ya se usó y aprobó en un informe anterior, así que
+no hay razón para reemplazarla por una traducción nueva de DeepL que podría redactarse distinto
+aunque diga lo mismo. Solo cuando el texto en español **sí cambió** respecto al trimestre pasado, el
+párrafo se traduce (vía DeepL, si está configurado) y reemplaza al correspondiente en inglés,
+**resaltado en amarillo** con la etiqueta "DeepL translation — please verify", para que lo revises
+antes de publicar — nunca se publica una traducción automática sin que la persona la confirme. Si
+DeepL no está configurado, o falla para algún párrafo puntual, ese párrafo (el que cambió) queda en
+**español**, resaltado, con la etiqueta "SPANISH — DeepL not configured, translate manually".
+
+Si no se puede comparar contra el trimestre anterior (no subiste ese Word, o la cantidad de
+párrafos de ese tramo no calza entre los dos trimestres), la app trata ese párrafo como "cambiado" y
+lo traduce de todos modos — mejor eso que dejar pasar un cambio real sin avisar. Y si algún
+trimestre la cantidad de tramos libres no calza entre español e inglés (por ejemplo, porque se
+agregó o se borró un párrafo de redacción libre en alguno de los dos), la app alinea los primeros
+tramos en común y deja un `[AVISO]` en el detalle del proceso pidiendo revisar a mano el resto —
+nunca inventa una alineación.
+
+### Traducción en vivo (DeepL) — opcional, desactivada por defecto
 
 Las traducciones de las tablas (EBITDA, Balance, Exposición Cambiaria, etc.) son diccionarios fijos
 verificados a mano una vez contra el Word en inglés de referencia, y no cambian de un trimestre a
-otro porque las etiquetas de esas tablas tampoco cambian. La tabla de **Riesgos críticos** es
-distinta: su contenido (nombre del riesgo, descripción, controles) es texto libre que sí puede
-cambiar cada trimestre, así que un diccionario fijo se desactualiza apenas se edita la redacción en
-español o aparece un riesgo nuevo — esto fue justo lo que reportaste como "el texto en inglés no
-está quedando exactamente igual al español".
+otro porque las etiquetas de esas tablas tampoco cambian. La tabla de **Riesgos críticos** y el
+**texto libre de todo el documento** (ver sección anterior) son distintos: su contenido es texto
+libre que sí puede cambiar cada trimestre, así que un diccionario fijo (o dejar la redacción vieja)
+se desactualiza apenas se edita la redacción en español o aparece algo nuevo — esto fue justo lo
+que reportaste como "el texto en inglés no está quedando exactamente igual al español".
 
-Para resolverlo, la app puede traducir esa tabla **en vivo** con la API de DeepL en vez de usar el
-diccionario fijo. Esto es opcional y queda **desactivado por defecto** — importante que lo sepas
-porque implica un trade-off real: el texto de esa tabla (nombre/descripción/controles de cada
-riesgo, que todavía no es público ese trimestre) sale de este computador hacia los servidores de
-DeepL para traducirse. Si no activas esto, la app sigue funcionando exactamente igual que antes
-(100% local, con el diccionario fijo como respaldo).
+Para resolverlo, la app puede traducir ese texto **en vivo** con la API de DeepL. Esto es opcional
+y queda **desactivado por defecto** — importante que lo sepas porque implica un trade-off real: ese
+texto (que todavía no es público ese trimestre) sale de este computador hacia los servidores de
+DeepL para traducirse. Si no activas esto, la app sigue funcionando exactamente igual que antes:
+100% local, con el diccionario fijo como respaldo para Riesgos, y el texto libre del resto del
+documento queda en español, resaltado, pendiente de que lo traduzcas tú misma.
 
 Para activarlo:
 1. Crea una cuenta gratuita en [deepl.com/pro-api](https://www.deepl.com/pro-api) (el plan DeepL
-   API Free no tiene costo, con un límite mensual de caracteres traducidos — de sobra para esta
-   tabla, que es corta). Copia tu API key desde el panel de tu cuenta.
-2. En Streamlit Community Cloud, entra a tu app → **Settings → Secrets**, y agrega:
+   API Free no tiene costo, con un límite mensual de caracteres traducidos — de sobra para esto).
+   Copia tu API key desde el panel de tu cuenta.
+2. En Streamlit Community Cloud, entra a tu app → **Settings → Secrets**, y agrega (con comillas,
+   o Streamlit lo rechaza por no ser TOML válido):
    ```
    DEEPL_API_KEY = "tu-api-key-aquí"
    ```
    (Nunca pongas la API key directamente en el código ni la subas a GitHub — el repositorio es
    público; "Secrets" de Streamlit Cloud es justamente el lugar seguro para esto, invisible para
    cualquiera que solo vea el código.)
-3. Guarda — Streamlit Cloud vuelve a desplegar la app sola. Cuando generes la versión en inglés,
-   vas a ver un aviso verde "🌐 Traducción en vivo vía DeepL activada" arriba del botón.
+3. Guarda — Streamlit Cloud vuelve a desplegar la app sola (toma alrededor de un minuto). Cuando
+   generes la versión en inglés, vas a ver un aviso verde "🌐 Traducción en vivo vía DeepL
+   activada" arriba del botón.
 
 Si la API key no está configurada, o DeepL no responde (sin internet, cuota agotada, servicio
-caído), la app no se cae: usa el diccionario fijo como respaldo y sigue generando el resto del
-informe con normalidad.
+caído), la app no se cae: usa el diccionario fijo como respaldo para Riesgos, deja el resto del
+texto libre en español resaltado, y sigue generando el resto del informe con normalidad.
 
 ## Cómo funciona (para referencia futura)
 
