@@ -595,7 +595,22 @@ TABLES = {
     # al max_lines por defecto (2) sin dynamic_row_height — se sube max_lines a 7 (la más larga
     # entra justo en 7 líneas a este ancho) y se activa dynamic_row_height para que esa fila crezca
     # en vez de montarse sobre la fila siguiente.
-    col_widths=[0.33,0.24,0.14,0.14,0.15],
+    #
+    # Ajuste posterior (feedback Melissa, Oct26): pidió que la primera columna (cuentas) sea más
+    # ancha para envolver menos el texto y que la tabla quede menos alta. Se reasignan fracciones de
+    # ancho EXISTENTES (nunca se sube fig_w: eso aumentaría page_factor y volvería la tabla final más
+    # alta todavía por el escalado de compensación de Word). Primer intento: quitarle a las columnas
+    # de valores (ci=2,3, formato 'dec2'/'dec4') — se revirtió de inmediato al renderizar y comparar
+    # contra el resultado anterior: la fila "Valor Libro de la acción (US$)" usa formato dec4
+    # ("0,0000085", 9 caracteres) y a 0.12 de ancho quedaba pegada sin espacio con el valor de la
+    # columna vecina ("0,00000850,0000084..."). Se probó en cambio achicar la columna Unidad (ci=1,
+    # 0.24→0.22): se mantiene muy por encima del mínimo ~0.213 (1.75in a fig_w=8.2in) documentado
+    # arriba para "Dolares por acción" y, renderizado, esa etiqueta pasó a entrar en UNA sola línea
+    # (antes 2). También se verificó que "Variaciones %" (ci=4) no se puede achicar por debajo de
+    # 0.14 sin que la palabra "Variaciones" se corte contra el borde de la imagen (probado
+    # renderizando a 0.12: se veía "Variacione" sin la "s" final), así que esa columna se deja
+    # también sin tocar.
+    col_widths=[0.36,0.22,0.14,0.14,0.14],
     max_lines=7, dynamic_row_height=True,
     row_fmt={1:'dec2',3:'dec2',5:'dec2',7:'auto_pct',9:'auto_pct',11:'dec4'},
     italic_col0_only=True,
@@ -817,11 +832,20 @@ TABLES = {
     cols=[(3,'str'),(4,'num'),(5,'num'),(6,'num'),(7,'num')],
     rows=[4,5,6,7,11],
     bold_rows={0,1,2,4}, total_rows={4}, header_rows={0,1,2}, center_cols={1,2,3,4},
-    col_widths=[0.28,0.18,0.18,0.18,0.18],
     # max_lines/dynamic_row_height: el encabezado "Ajuste Valor razonable al" (y su traducción
     # "Fair Value adjustment as of") perdía palabras en silencio con el default (max_lines=2) —
     # mismo bug de wrap_label() ya visto en otras tablas. Solo afecta encabezados (header_rows):
     # las columnas numéricas de datos no se envuelven (no tienen wrap_all_cols).
+    #
+    # col_widths (feedback Melissa, Oct26): la fila de encabezado (ri=0) quedaba muy alta porque
+    # "Ajuste Valor razonable al" necesitaba las 4 líneas completas de max_lines a 0.18 de ancho de
+    # columna. Se le quitan 0.02 a cada una de las tres columnas "10% Reduction" (ci=2,3,4 — textos
+    # cortos con margen de sobra, verificado con wrap_label() que siguen envolviendo igual en 2
+    # líneas a 0.16) y se los suma a la columna del encabezado largo (ci=1: 0.18→0.24), que así baja
+    # a 2 líneas en español (antes 4) y a 3 en inglés (antes 3, sin cambio). La columna de cuentas
+    # (ci=0) se deja intacta: no hay forma de verificar sin el Excel real cuánto margen tiene el
+    # texto que cae ahí.
+    col_widths=[0.28,0.24,0.16,0.16,0.16],
     max_lines=4, dynamic_row_height=True,
  ),
 }

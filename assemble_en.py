@@ -516,6 +516,104 @@ def apply_global_sweep(doc, old_periods, new_periods, log):
                 n_runs += 1
     log.append(f"[OK] (EN) Barrido final de fechas/etiquetas sueltas: {n_runs} fragmentos de texto corregidos")
 
+# TABLE_ANCHORS_EN: (regex, tabla) EN EL ORDEN en que las 18 tablas-imagen aparecen en el informe,
+# verificado contra el texto que antecede a cada imagen en el Word de referencia (Jun26,
+# Earning_Report_June_2026). Reemplaza al viejo IMAGE_TO_TABLE (render_tables_v5.py), que asumía que
+# "la imagen N (contada por nombre de archivo) es SIEMPRE la tabla N de esta lista" para CUALQUIER
+# Word base que se suba — eso se rompe apenas el Word base es de un trimestre con una estructura de
+# tablas distinta a la de referencia (ej. Flujo de Efectivo como imagen en vez de tabla nativa de
+# Word en marzo 2026, o la tabla de Riesgos como tabla nativa en vez de imagen ese mismo trimestre):
+# cada imagen de ahí en adelante terminaba recibiendo la tabla equivocada (ver aviso a Melissa
+# oct-2026, ej. la tabla "Vencimientos de Préstamos" apareciendo donde debía ir Flujo de Efectivo).
+# Ahora se empareja cada imagen con su tabla por el texto que la antecede (ver _build_image_table_map
+# más abajo), tolerando que a un trimestre le falte o le sobre alguna imagen respecto al de
+# referencia, en vez de asumir ciegamente la misma cantidad y orden.
+TABLE_ANCHORS_EN = [
+    (r'^The calculation of the EBITDA is detailed below', 'EBITDA'),
+    (r'^Main Components of Income$', 'Ingresos'),
+    (r'^Main Components of Income$', 'IngresosxSegmento'),
+    (r'^Main Components of Costs and Expenses$', 'Costos'),
+    (r'^Other Components of Income Statement$', 'OtrosComp'),
+    (r'^Activity Indicators:?$', 'IndicadoresActividad'),
+    (r"^The Company.s net financial debt (was reduced|decreased|increased)", 'DFN'),
+    (r'^The evolution of the main financial indicators is as follows', 'Indicadores1'),
+    (r'^(During this period, the company maintained its debt structure|The book value of the share)', 'Rentabilidad'),
+    (r'^Main items of the Consolidated Statement of Financial Position$', 'Balance'),
+    (r'^Below is a summary of the maturities of total financial liabilities', 'VctosPtmos'),
+    (r'^The following table shows exposure in currencies different to the dollar', 'ExposicTC_tabla'),
+    (r'^The potential net effect on financial assets and liabilities', 'EfectoTC'),
+    (r'^As stated beforehand,.*risks identified by Hortifrut', 'RiesgosPorTipo'),
+    (r'^As stated beforehand,.*risks identified by Hortifrut', 'RiesgosPorSeveridad'),
+    (r'^Main critical risks faced as of', 'Riesgos'),
+    (r'^The main insurances contracted as of', 'Seguros'),
+    (r'^Below is the detail of the effect that a 10% reduction', 'FVfruta'),
+]
+
+def _has_image_el(p):
+    return any(el.tag.endswith('}blip') for el in p._p.iter())
+
+def _build_image_table_map(word_path, log):
+    """Devuelve {índice de imagen (1-based, en el orden en que aparecen las imágenes leyendo el Word
+    de arriba hacia abajo): tabla}, usando TABLE_ANCHORS_EN sobre el texto del párrafo más cercano
+    ANTES de cada imagen (ver docstring de TABLE_ANCHORS_EN). Se abre `word_path` de nuevo, limpio,
+    en vez de reusar el Word en inglés ya en memoria — para no depender de si el texto narrativo de
+    alrededor ya fue sobreescrito por la traducción de este trimestre."""
+    try:
+        doc_fresh = docx.Document(word_path)
+    except Exception as ex:
+        log.append(f"[ERROR] (EN) No pude releer el Word base en inglés para ubicar sus tablas-imagen: {ex}")
+        return {}
+
+    paras = doc_fresh.paragraphs
+    anchors_for_image = []
+    for i, p in enumerate(paras):
+        if _has_image_el(p):
+            j = i - 1
+            while j >= 0 and not paras[j].text.strip():
+                j -= 1
+            anchors_for_image.append(paras[j].text.strip() if j >= 0 else '')
+
+    result = {}
+    ai, ti = 0, 0
+    n_img, n_tab = len(anchors_for_image), len(TABLE_ANCHORS_EN)
+    unmatched_images = []
+    while ai < n_img and ti < n_tab:
+        text = anchors_for_image[ai]
+        rx, tkey = TABLE_ANCHORS_EN[ti]
+        if re.search(rx, text):
+            result[ai + 1] = tkey
+            ai += 1; ti += 1
+            continue
+        found_ahead = False
+        for look in range(1, 6):
+            if ti + look >= n_tab:
+                break
+            rx2, _tkey2 = TABLE_ANCHORS_EN[ti + look]
+            if re.search(rx2, text):
+                ti += look
+                found_ahead = True
+                break
+        if found_ahead:
+            continue
+        unmatched_images.append(ai + 1)
+        ai += 1
+
+    if unmatched_images:
+        log.append(
+            f"[AVISO] (EN) {len(unmatched_images)} imagen(es) del Word base en inglés (posición(es) "
+            f"{unmatched_images} contando solo imágenes) no calzaron con ninguna tabla conocida por su "
+            "texto de contexto — se dejaron tal cual, sin reemplazar (puede ser una tabla que ese "
+            "trimestre viene como imagen en un formato distinto al de referencia)."
+        )
+    if ti < n_tab:
+        faltantes = [tkey for _, tkey in TABLE_ANCHORS_EN[ti:]]
+        log.append(
+            f"[AVISO] (EN) {len(faltantes)} tabla(s) no encontraron su imagen correspondiente en el "
+            f"Word base en inglés (probablemente ese trimestre no la tenía como imagen, ej. porque era "
+            f"tabla nativa de Word): {faltantes}"
+        )
+    return result
+
 def collect_and_render_tables_en(wb, word_path, log, doc=None):
     """Igual que collect_and_render_tables (assemble.py) pero renderiza cada tabla en inglés
     (render_table_en: mismo Excel en español, formato en-US + etiquetas traducidas vía TABLES_EN).
@@ -531,24 +629,20 @@ def collect_and_render_tables_en(wb, word_path, log, doc=None):
     if 'Indicadores1' not in wb.sheetnames and 'Ind. Financieros' in wb.sheetnames:
         RT.TABLES['Indicadores1']['sheet'] = 'Ind. Financieros'
 
-    SKIP_KEYS = set()  # 'Riesgos' ya se traduce (ver TABLES_EN en render_tables_v5.py)
-
     with zipfile.ZipFile(word_path, 'r') as z:
         rels = z.read('word/_rels/document.xml.rels').decode('utf-8')
     actual = [n for n in re.findall(r'Target="media/([^"]+)"', rels) if re.match(r'image\d+', n)]
     actual = sorted(actual, key=lambda x: int(re.search(r'\d+', x).group()))
-    c2a = {}
-    for i, a in enumerate(actual, 1):
-        for ext in ['.emf', '.png']: c2a[f'image{i}{ext}'] = a
+
+    img_idx_to_table = _build_image_table_map(word_path, log)
 
     img_dir = tempfile.mkdtemp(); image_map = {}; rendered = {}
-    for img_name, tkey in RT.IMAGE_TO_TABLE.items():
-        if tkey in SKIP_KEYS: continue
+    for img_idx, tkey in img_idx_to_table.items():
         if tkey not in RT.TABLES or tkey not in RT.TABLES_EN: continue
         spec = RT.TABLES[tkey]
         if spec['sheet'] not in wb.sheetnames: continue
-        a = c2a.get(img_name)
-        if not a: continue
+        if img_idx > len(actual): continue
+        a = actual[img_idx - 1]
         if tkey in rendered:
             image_map[a] = rendered[tkey]; continue
         out_png = os.path.join(img_dir, f'{tkey}.png')
@@ -1275,19 +1369,30 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
                 # cantidad de cifras no calza (caso raro): no se puede sustituir con confianza, se
                 # sigue de largo al camino normal de traducir de nuevo.
 
+            # Sin resaltado (feedback Melissa, Oct26: "No es necesario el resaltado en los textos, no
+            # me dice nada ya que todo está quedando resaltado. Excluir los resaltados."): como DeepL
+            # está apagado por defecto (no hay DEEPL_API_KEY en los Secrets, ver docstring del módulo),
+            # en la práctica casi toda oración nueva o distinta de la del trimestre anterior caía en
+            # alguno de estos tres casos — con el marcador [[...]] eso resaltaba en amarillo la
+            # oración COMPLETA (no un detalle puntual como la "causa" del lado español, ver
+            # assemble.py), tiñendo de amarillo la mayor parte del documento. Se saca el marcador
+            # [[...]] (ya no se resalta) pero se deja el prefijo de texto plano ("DeepL translation —
+            # please verify:", "SPANISH — DeepL not configured, translate manually:", etc.): sigue
+            # siendo fácil encontrar con Ctrl+F qué oraciones faltan por revisar/traducir, solo que ya
+            # no satura la vista de amarillo.
             translated = DT.translate_es_en(convert_es_numbers_to_en(es_text)) if deepl_on else None
             if translated:
-                target_texts.append(f"[[{DEEPL_PROPOSAL_PREFIX_EN}{_sanitize_for_markup(translated)}]]")
+                target_texts.append(f"{DEEPL_PROPOSAL_PREFIX_EN}{_sanitize_for_markup(translated)}")
                 n_translated += 1
             elif deepl_on:
-                target_texts.append(f"[[{NO_DEEPL_FAILED_PREFIX_EN}{_sanitize_for_markup(es_text)}]]")
+                target_texts.append(f"{NO_DEEPL_FAILED_PREFIX_EN}{_sanitize_for_markup(es_text)}")
                 n_fallback += 1
                 n_fallback_failed += 1
                 reason = DT.get_last_error()
                 if reason and reason not in deepl_error_reasons:
                     deepl_error_reasons.append(reason)
             else:
-                target_texts.append(f"[[{NO_DEEPL_PREFIX_EN}{_sanitize_for_markup(es_text)}]]")
+                target_texts.append(f"{NO_DEEPL_PREFIX_EN}{_sanitize_for_markup(es_text)}")
                 n_fallback += 1
 
         _replace_list_items(en_items, target_texts)
@@ -1305,21 +1410,28 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
         )
         if n_fallback:
             msg += f", {n_fallback} dejada(s) en español pendiente de traducir a mano"
-        msg += ". Solo lo traducido por redacción nueva queda resaltado en amarillo para que lo verifiques."
+        msg += (
+            ". Por pedido de Melissa (Oct26) ya no se resalta en amarillo: las oraciones traducidas "
+            "por DeepL o dejadas pendientes de traducir a mano llevan un prefijo de texto plano "
+            "(\"DeepL translation — please verify:\", \"SPANISH — DeepL not configured, translate "
+            "manually:\", etc.) en vez de resaltado — buscable con Ctrl+F."
+        )
         log.append(msg)
         if not deepl_on and n_fallback:
             log.append(
                 "[AVISO] (EN) DeepL no está configurado (falta DEEPL_API_KEY en los Secrets de la "
                 "app): el texto narrativo nuevo o que cambió respecto al trimestre anterior quedó en "
-                "español, resaltado, pendiente de traducir a mano."
+                "español (sin resaltar, con el prefijo \"SPANISH — DeepL not configured, translate "
+                "manually:\"), pendiente de traducir a mano."
             )
         if deepl_on and n_fallback_failed:
             motivos = "; ".join(deepl_error_reasons) if deepl_error_reasons else "motivo no disponible"
             log.append(
                 f"[ALERTA-DEEPL] (EN) DeepL está configurado, pero {n_fallback_failed} traducción(es) "
                 f"fallaron igual. Motivo reportado por DeepL: {motivos}. Esos párrafos quedaron en "
-                "español, resaltados, pendientes de traducir a mano — revisa la API key y la cuenta "
-                "de DeepL (¿está verificada/activada? ¿tiene cuota disponible?)."
+                "español (sin resaltar, con el prefijo \"SPANISH — DeepL translation failed, "
+                "translate manually:\"), pendientes de traducir a mano — revisa la API key y la "
+                "cuenta de DeepL (¿está verificada/activada? ¿tiene cuota disponible?)."
             )
     else:
         log.append("[AVISO] (EN) No encontré ningún segmento de texto narrativo para comparar/traducir.")
