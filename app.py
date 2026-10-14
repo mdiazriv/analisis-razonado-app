@@ -12,12 +12,16 @@ el Word actualizado. Todo el procesamiento ocurre en este computador; ningún ar
 envía a servidores externos — con UNA excepción, opcional y desactivada por defecto: si se
 configura una API key de DeepL (ver "Secrets" de Streamlit Cloud / variable DEEPL_API_KEY), la
 versión en inglés traduce en vivo, mandándolo a los servidores de DeepL: el texto de la tabla de
-Riesgos críticos, y (al generar la versión en inglés) todo el texto libre del documento que no
-salga de las plantillas ni del Excel — comparando párrafo por párrafo el Word en español
-DEFINITIVO de este trimestre contra el Word en inglés recién generado (a pedido explícito de
-Melissa, para que la traducción no quede pegada a la de un trimestre anterior). Sin esa API key
-configurada, nada cambia salvo que ese texto libre queda en español, resaltado, pendiente de que
-la persona lo traduzca a mano: la app sigue funcionando 100% local, igual que antes.
+Riesgos críticos, y (al generar la versión en inglés) TODO el texto narrativo del documento —
+cada oración y viñeta, incluidas las que llevan cifras — se traduce literalmente desde el Word
+en español DEFINITIVO de este trimestre (a pedido explícito de Melissa: que el inglés sea
+exactamente igual al español, oración por oración, en vez de recalcular una redacción en inglés
+fija con números nuevos). Para no perder la redacción ya aprobada de conceptos que no cambiaron,
+se compara contra el Word en español del trimestre ANTERIOR y se reutiliza tal cual la traducción
+de lo que sigue diciendo lo mismo; solo lo nuevo o lo que cambió se manda a traducir. Sin esa API
+key configurada, nada cambia salvo que ese texto nuevo/cambiado queda en español, resaltado,
+pendiente de que la persona lo traduzca a mano: la app sigue funcionando 100% local, igual que
+antes.
 """
 import os
 import sys
@@ -45,9 +49,9 @@ try:
 except ImportError:
     _EN_AVAILABLE = False
 
-# Traducción dinámica (DeepL) — tabla de Riesgos críticos Y, al generar la versión en inglés, todo
-# el texto libre del documento no cubierto por las plantillas/Excel (ver assemble_en.
-# translate_free_text_from_definitive_es) — opcional y desactivada por defecto. Se activa SOLO si
+# Traducción dinámica (DeepL) — tabla de Riesgos críticos Y, al generar la versión en inglés, TODO
+# el texto narrativo del documento (ver assemble_en.translate_narrative_from_definitive_es) —
+# opcional y desactivada por defecto. Se activa SOLO si
 # configuraste la API key en "Secrets" de Streamlit Cloud (Settings → Secrets de tu app) así:
 #     DEEPL_API_KEY = "tu-api-key-aquí"
 # Sin esa key, _DEEPL_ON queda en False y la app sigue funcionando exactamente igual que antes
@@ -228,21 +232,23 @@ else:
         )
         st.caption(
             "Súbelo después de dejar listo el Word en español definitivo de este trimestre (causas de "
-            "negocio completadas, y cualquier otro ajuste de redacción ya hecho). La app toma de acá "
-            "las causas de negocio resaltadas en amarillo tal como quedaron escritas."
+            "negocio completadas, y cualquier otro ajuste de redacción ya hecho). TODO el texto "
+            "narrativo en inglés (cada oración y viñeta, incluidas las que llevan cifras) sale de "
+            "traducir literalmente este Word — así el inglés queda exactamente igual al español, en "
+            "vez de recalcular una redacción en inglés fija con números nuevos."
         )
 
-        # Word en español del TRIMESTRE ANTERIOR: punto de comparación para saber qué texto libre
-        # cambió de verdad este trimestre (ver assemble_en.translate_free_text_from_definitive_es).
-        # Antes esto se tomaba en silencio del "2. Word base a actualizar" de la sección en español de
-        # arriba (mismo archivo, reutilizado) — pero si esta sección se usa sola, en una sesión donde
-        # esa otra sección no tiene nada subido (o Melissa solo quiere regenerar el inglés sin volver a
-        # tocar la sección en español), ese campo queda vacío sin que se note, y la comparación se
-        # pierde: TODO el texto libre se trata como "cambiado" y queda marcado para traducir, incluso
-        # texto que en realidad no cambió (esto fue justamente lo que reportó Melissa: "toda la sección
-        # de riesgo quedó como pendiente de traducción... esto no debería haber cambiado"). Por eso
-        # ahora hay un uploader propio, independiente del de la sección en español, con un estado
-        # explícito de si hay o no punto de comparación ANTES de generar.
+        # Word en español del TRIMESTRE ANTERIOR: punto de comparación para saber qué cambió de verdad
+        # este trimestre y así reusar, sin volver a traducir, lo que no cambió (ver assemble_en.
+        # translate_narrative_from_definitive_es). Antes esto se tomaba en silencio del "2. Word base a
+        # actualizar" de la sección en español de arriba (mismo archivo, reutilizado) — pero si esta
+        # sección se usa sola, en una sesión donde esa otra sección no tiene nada subido (o Melissa solo
+        # quiere regenerar el inglés sin volver a tocar la sección en español), ese campo queda vacío
+        # sin que se note, y la comparación se pierde: TODO el texto narrativo se trata como "cambiado"
+        # y queda marcado para traducir, incluso texto que en realidad no cambió (esto fue justamente lo
+        # que reportó Melissa: "toda la sección de riesgo quedó como pendiente de traducción... esto no
+        # debería haber cambiado"). Por eso hay un uploader propio, independiente del de la sección en
+        # español, con un estado explícito de si hay o no punto de comparación ANTES de generar.
         word_file_es_base_en = st.file_uploader(
             "Word en ESPAÑOL del TRIMESTRE ANTERIOR (para comparar qué cambió; recomendado) (.docx)",
             type=["docx"],
@@ -252,7 +258,8 @@ else:
         if word_file_es_base_en:
             st.caption(
                 "✅ Tengo el Word en español del trimestre anterior (subido acá mismo): se compara "
-                "párrafo por párrafo y solo se marca para traducir el texto libre que de verdad cambió."
+                "oración por oración y viñeta por viñeta, y solo se marca para traducir lo que de "
+                "verdad cambió — lo demás se deja con la misma traducción ya aprobada el trimestre pasado."
             )
         elif word_file:
             st.caption(
@@ -263,24 +270,32 @@ else:
         else:
             st.caption(
                 "⚠️ No tengo el Word en español del trimestre anterior (ni aquí ni en \"2. Word base a "
-                "actualizar\" arriba): no voy a poder distinguir qué texto libre cambió de verdad — "
-                "**todo** el texto libre (título, subtítulos, factores de riesgo, seguros, valor justo de "
-                "la fruta, etc.) se marcará como pendiente de traducir, aunque no haya cambiado. Sube el "
-                "Word en español del trimestre anterior arriba para evitar esto."
+                "actualizar\" arriba): no voy a poder distinguir qué cambió de verdad — **todo** el "
+                "texto narrativo (título, subtítulos, cifras del resultado, factores de riesgo, "
+                "seguros, valor justo de la fruta, etc.) se marcará como pendiente de traducir, aunque "
+                "no haya cambiado. Sube el Word en español del trimestre anterior arriba para evitar esto."
             )
 
         if _DEEPL_ON:
             st.caption(
-                "🌐 Traducción en vivo vía DeepL activada: el texto libre que cambió este trimestre (y el "
-                "de la tabla de Riesgos críticos) se traduce mandándolo a los servidores de DeepL, en vez "
-                "de dejarlo en español pendiente de traducir a mano."
+                "🌐 Traducción en vivo vía DeepL activada: el texto narrativo se compara oración por "
+                "oración y viñeta por viñeta contra el Word en español del trimestre anterior. Si una "
+                "oración es idéntica, se reutiliza la traducción en inglés ya aprobada tal cual (sin "
+                "resaltar). Si solo cambiaron las cifras y/o el período (Dic25 → Jun26, etc.) pero la "
+                "redacción es la misma, también se reutiliza esa traducción ya aprobada actualizando "
+                "las cifras/el período directo desde el español — tampoco queda resaltada, porque no "
+                "pasó por DeepL ni hace falta revisarla. Solo se traduce vía DeepL (y queda resaltado en "
+                "amarillo para que lo revises) el texto con redacción realmente nueva o distinta a la "
+                "del trimestre anterior."
             )
         else:
             st.caption(
                 "Traducción en vivo vía DeepL: desactivada (no hay API key configurada en \"Secrets\" "
-                "de Streamlit Cloud). El texto libre que cambió este trimestre queda en español, "
-                "resaltado, pendiente de que tú lo traduzcas a mano; la tabla de Riesgos usa su "
-                "traducción fija guardada."
+                "de Streamlit Cloud). El texto narrativo sin cambios, o que solo cambió en cifras y/o "
+                "período respecto al trimestre anterior, igual se actualiza solo (reutilizando la "
+                "traducción ya aprobada), sin necesitar DeepL. Solo el texto con redacción realmente "
+                "nueva o distinta queda en español, resaltado, pendiente de que tú lo traduzcas a mano; "
+                "la tabla de Riesgos usa su traducción fija guardada."
             )
 
         generate_en_clicked = st.button(
@@ -307,11 +322,11 @@ else:
                 with open(word_es_edited_path, "wb") as f:
                     f.write(word_file_es_edited.getbuffer())
 
-                # Punto de comparación para saber qué texto libre cambió este trimestre (ver
-                # assemble_en.translate_free_text_from_definitive_es): el uploader propio de esta
+                # Punto de comparación para saber qué texto narrativo cambió este trimestre (ver
+                # assemble_en.translate_narrative_from_definitive_es): el uploader propio de esta
                 # sección si se usó, si no el de la sección en español (ver _es_base_candidate y los
                 # avisos de arriba) — si tampoco hay eso, la app igual funciona, pero traduce todo el
-                # texto libre en vez de solo lo que cambió (se avisa en el detalle del proceso).
+                # texto narrativo en vez de solo lo que cambió (se avisa en el detalle del proceso).
                 word_es_base_path = None
                 if _es_base_candidate:
                     word_es_base_path = os.path.join(tmp_en, "input_es_base.docx")

@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import ar_engine_en as E
 import periods_en as P
 import assemble as ASM_ES  # motor en español: se reutiliza collect_causes_by_highlight (ver generate_en)
-import deepl_translate as DT  # traducción general de texto libre (ver translate_free_text_from_definitive_es)
+import deepl_translate as DT  # traducción del texto narrativo (ver translate_narrative_from_definitive_es)
 
 MARK_RE = re.compile(r'\[\[([^\]]+)\]\]|\{\{([^}]+)\}\}')
 
@@ -790,79 +790,105 @@ def remove_stale_risk_table_en(doc, log):
             "el detalle real de riesgos ya lo muestra la imagen traducida más abajo en el documento."
         )
 
-# ---------- Traducción general de texto libre (todo el documento), vía DeepL ----------
-# A diferencia de los TEMPLATES de arriba (frases calculadas desde el Excel) y de las CAUSAS DE
-# NEGOCIO (frases puntuales resaltadas a mano, ver _merge_causes_from_edited_es), esto cubre TODO
-# lo demás: cualquier párrafo del documento que no sea ni una plantilla reconocida ni una viñeta de
-# bridge, y que por lo tanto solo exista porque alguien lo escribió a mano directamente en el Word
-# (el título, algunos subtítulos de sección, y sobre todo el bloque largo de factores de riesgo /
-# seguros / valor justo de la fruta). Antes de esto, esos párrafos quedaban tal cual venían en el
-# Word BASE en inglés — es decir, con la redacción del TRIMESTRE ANTERIOR — que es justo lo que
-# Melissa reportó como "el texto en inglés no está quedando exactamente igual al español" y pidió
-# resolver de forma general, no solo para la tabla de Riesgos: "la traducción no es solo de riesgos
-# ... la app debe comparar la versión en español definitiva con la versión en inglés, identificar
-# las variaciones y proponer traducciones (dejar destacado), para que el usuario verifique", "todo
-# el documento, párrafo por párrafo".
+# ---------- Traducción general de TODO el texto narrativo, vía DeepL ----------
+# Antes, esto solo cubría el texto libre (párrafos que no calzaban con ninguna plantilla de
+# SINGLE_TEMPLATES_EN/HEADER_TEMPLATES_EN); las oraciones con cifras (EBITDA, costos, razón de
+# endeudamiento, etc.) y las viñetas del puente de EBITDA/Ganancia Atribuible se generaban
+# recalculando una plantilla en inglés fija (ar_engine_en.py) con cifras nuevas del Excel. Melissa
+# reportó (oct-2026) algo más grave que una diferencia de redacción: las CIFRAS de esas viñetas en
+# inglés no coincidían con las del español — ej. "Higher EBITDA... US$107.81 million" en inglés vs.
+# "EBITDA... US$197,89 millones" en español, el mismo concepto, el mismo trimestre. La causa: el
+# motor de cifras en inglés (ar_engine_en.py) calcula esos valores de forma INDEPENDIENTE del motor
+# en español (ar_engine.py) — ambos leen el mismo Excel, pero son dos implementaciones separadas que
+# pueden (y en este caso lo hicieron) calzar con el ancla equivocada o computar un período distinto,
+# sin que nada lo detecte. Mientras existan dos motores de cifras en paralelo, este tipo de error
+# puede volver a aparecer en cualquier otra oración con cifras.
 #
-# Mecánica: se clasifica cada párrafo de AMBOS documentos (el Word en español DEFINITIVO de este
-# trimestre, y este mismo Word en inglés ya generado) como "cubierto" (calza con una ancla de
-# SINGLE_TEMPLATES/HEADER_TEMPLATES, o es una viñeta de bridge) o "libre" (todo lo demás). Los
-# párrafos libres consecutivos forman "tramos"; se verificó a mano, contra los Word reales de junio
-# 2026, que español e inglés producen la MISMA cantidad de tramos libres, en el MISMO orden y con la
-# MISMA cantidad de párrafos por tramo — por eso se alinean por POSICIÓN ORDINAL (el tramo libre
-# n-ésimo en español corresponde al tramo libre n-ésimo en inglés), sin intentar adivinar por
-# contenido. Si en algún trimestre futuro la cantidad no calza (p. ej. porque se agregó o se borró un
-# párrafo de redacción libre en alguno de los dos idiomas), se alinean los primeros tramos en común y
-# se deja un [AVISO] para que se revise a mano el resto — nunca se inventa una alineación.
+# Por pedido explícito de Melissa: "necesito que el texto en inglés sea exactamente igual al texto
+# en español... lo mejor sería la traducción línea a línea... usar el inglés del trimestre anterior
+# como referencia para mantener la misma traducción a ciertos conceptos" — aplicado a TODO el
+# documento (no solo a las secciones donde ya vio el problema). Esto elimina de raíz el riesgo de
+# arriba: ya no existe un segundo motor de cifras en inglés para el texto narrativo — cada oración y
+# viñeta en inglés sale de traducir, literalmente, la oración/viñeta ya definitiva en español (la
+# misma que Melissa revisó y aprobó, con las cifras y causas de negocio que ella misma escribió), así
+# que no puede haber un descalce de cifras: si el español dice 197,89, el inglés dice 197.89 — nunca
+# otro número. Las funciones de SINGLE_TEMPLATES_EN/ar_engine_en.py y el merge de causas de negocio
+# (collect_original_causes, _merge_causes_from_edited_es, apply_single_templates, apply_bridge_bullets
+# más arriba) quedaron SIN USAR por este motivo — se dejan definidas por si hiciera falta volver atrás,
+# pero generate_en() ya no las llama.
 #
-# Cada párrafo libre en español se traduce vía DeepL y reemplaza el texto del párrafo libre
-# correspondiente en inglés, resaltado en amarillo y con una etiqueta que dice que es una propuesta
-# de traducción pendiente de verificar (igual que el resto de los resaltados de este motor, nunca se
-# publica una traducción automática sin que la persona la revise). Si DeepL no está configurado (o
-# falla para un párrafo puntual), se deja el texto en ESPAÑOL tal cual, resaltado, con una etiqueta
-# que pide traducirlo a mano — mejor eso que dejar la redacción vieja del trimestre anterior sin
-# avisar que quedó desactualizada.
+# Lo que SÍ sigue siendo determinístico (no pasa por acá): el título con la fecha y los encabezados
+# de sección (HEADER_TEMPLATES_EN, ver apply_header_templates) — son puro cálculo de fechas/períodos
+# a partir del Excel, no cifras financieras ni redacción libre, así que no tienen este riesgo y es
+# mejor mantenerlos 100% determinísticos en vez de confiar en que DeepL arme bien el rango de fechas.
+# Tampoco pasan por acá la tabla de Flujo de Efectivo (es una tabla nativa de Word, no texto
+# narrativo, ver update_flujo_caja_table_en) ni las 18 tablas-imagen (render_tables_v5.py, con su
+# propio mecanismo de traducción, ya revisado por separado).
+#
+# Mecánica: se recorre cada documento (el Word en español DEFINITIVO de este trimestre, el Word en
+# español del trimestre ANTERIOR si se subió, y el Word en inglés recién abierto, que al llegar acá
+# todavía trae el texto en inglés del trimestre ANTERIOR tal cual el Word base que se subió) y se
+# agrupa en "segmentos": un párrafo normal es un segmento de un elemento; una racha de viñetas (estilo
+# 'List' de Word) consecutivas es UN segmento con varios elementos (para poder agregar/quitar viñetas
+# si la cantidad cambia, ver _replace_list_items). Los párrafos vacíos, los que solo traen una imagen,
+# y los que calzan con un encabezado de HEADER_TEMPLATES cortan un segmento (no se tocan acá).
+#
+# Para no perder consistencia de redacción (el pedido de Melissa de "usar el inglés anterior como
+# referencia"): se arma un diccionario español->inglés comparando, posición por posición, el texto
+# del Word en español ANTERIOR contra el texto que YA trae el Word en inglés (que es, segmento por
+# segmento, la traducción aprobada de ESE mismo español anterior, generada por esta misma lógica el
+# trimestre pasado). Para cada oración/viñeta de ESTE trimestre: si su texto (normalizado) aparece tal
+# cual en ese diccionario, se reutiliza esa traducción aprobada SIN volver a llamar a DeepL (cero
+# riesgo de que DeepL traduzca el mismo texto con una palabra distinta a como quedó la vez pasada); si
+# no aparece (texto nuevo o reescrito), se traduce recién vía DeepL. Esto funciona aunque una oración
+# se haya corrido de posición dentro de un bloque (viñetas reordenadas, una agregada o borrada en
+# medio) porque la búsqueda es por CONTENIDO, no por posición — mismo principio que la corrección
+# anterior al descalce de la sección de Riesgos.
 
 def _has_image(p):
     return any(el.tag.endswith('}blip') for el in p._p.iter())
 
-def _classify_free_runs(doc, anchor_regexes, is_list_fn):
-    """Agrupa los párrafos de `doc` en tramos consecutivos de texto NO cubierto por ninguna ancla de
-    `anchor_regexes` (ya compiladas) ni reconocido como viñeta por `is_list_fn`. Los párrafos vacíos
-    y los que solo contienen una imagen cortan el tramo (no cuentan como cubiertos ni como libres)."""
-    runs = []
-    cur = []
+def _is_header_para(p, header_anchors):
+    t = p.text.strip()
+    return any(rx.search(t) for rx in header_anchors)
+
+def _segment_narrative(doc, header_anchors):
+    """Agrupa los párrafos de `doc` en segmentos: un párrafo normal = un segmento de 1 elemento; una
+    racha de viñetas consecutivas (ver _is_list_para) = un segmento de N elementos. Los párrafos
+    vacíos, los que solo traen una imagen (_has_image) y los que calzan con un encabezado de
+    HEADER_TEMPLATES (fecha/título de sección, ver docstring de arriba) cortan el segmento actual sin
+    pasar a formar parte de ninguno — esos se actualizan aparte, de forma determinística."""
+    segments = []
+    cur_list = []
     for p in doc.paragraphs:
         t = p.text.strip()
-        if not t or _has_image(p):
-            if cur:
-                runs.append(cur); cur = []
+        if not t or _has_image(p) or _is_header_para(p, header_anchors):
+            if cur_list:
+                segments.append(cur_list); cur_list = []
             continue
-        if is_list_fn(p) or any(rx.search(t) for rx in anchor_regexes):
-            if cur:
-                runs.append(cur); cur = []
+        if _is_list_para(p):
+            cur_list.append(p)
             continue
-        cur.append(p)
-    if cur:
-        runs.append(cur)
-    return runs
+        if cur_list:
+            segments.append(cur_list); cur_list = []
+        segments.append([p])
+    if cur_list:
+        segments.append(cur_list)
+    return segments
 
 DEEPL_PROPOSAL_PREFIX_EN = "DeepL translation — please verify: "
 NO_DEEPL_PREFIX_EN = "SPANISH — DeepL not configured, translate manually: "
-# NO_DEEPL_FAILED_PREFIX_EN: mismo caso de "se quedó en español, pendiente de traducir a mano",
-# pero cuando DeepL SÍ está configurado y la llamada de todos modos falló (key inválida, cuota
-# agotada, problema de red) — antes se usaba el mismo NO_DEEPL_PREFIX_EN de arriba en los dos
-# casos, lo que llevó a Melissa a pensar que su API key no había quedado guardada ("Al parecer
-# DeepL aún no está bien configurado") cuando en realidad SÍ estaba configurada pero esa llamada
-# puntual había fallado. El motivo real queda en el log (ver más abajo, DT.get_last_error()).
+# NO_DEEPL_FAILED_PREFIX_EN: mismo caso de "se quedó en español, pendiente de traducir a mano", pero
+# cuando DeepL SÍ está configurado y la llamada de todos modos falló (key inválida, cuota agotada,
+# problema de red) — el motivo real queda en el log (DT.get_last_error()).
 NO_DEEPL_FAILED_PREFIX_EN = "SPANISH — DeepL translation failed, translate manually: "
 
 _DIFF_WS_RE = re.compile(r'\s+')
 
 def _normalize_for_diff(s):
-    """Normaliza un texto para compararlo contra el mismo párrafo del trimestre anterior: nunca se
-    quiere traducir de nuevo (ni marcar como 'cambió') algo que solo difiere en un espacio doble, una
-    comilla tipográfica vs. recta, o un salto de línea — ruido típico de guardar en Word, no un
+    """Normaliza un texto para compararlo contra el mismo texto del trimestre anterior: nunca se
+    quiere traducir de nuevo (ni tratar como 'distinto') algo que solo difiere en un espacio doble,
+    una comilla tipográfica vs. recta, o un salto de línea — ruido típico de guardar en Word, no un
     cambio real de redacción."""
     if s is None:
         return ''
@@ -874,206 +900,276 @@ def _sanitize_for_markup(s):
     """set_paragraph_text usa [[...]] para resaltar en amarillo: si el contenido en sí trae un
     corchete suelto (del español original o de la traducción de DeepL), rompe ese parseo y el
     párrafo queda sin resaltar, con los corchetes de marcado visibles como texto literal. Para
-    evitarlo, cualquier corchete que traiga el contenido se cambia por paréntesis antes de
-    envolverlo en [[...]] — no se pierde información, solo el tipo de signo."""
+    evitarlo, cualquier corchete que traiga el contenido se cambia por paréntesis antes de envolverlo
+    en [[...]] — no se pierde información, solo el tipo de signo."""
     return s.replace('[', '(').replace(']', ')')
 
-def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_base_path, log):
-    """Ver docstring de la sección de arriba. doc_en: el Word en inglés YA generado, después de
-    aplicar templates/causas/bridge/flujo de caja/limpieza de la tabla de riesgos obsoleta (así los
-    tramos "libres" que se detectan acá son de verdad solo lo que ninguna otra lógica tocó).
-    word_es_edited_path: ruta al Word en español definitivo de este trimestre (obligatorio, ver
-    generate_en). word_es_base_path: ruta al Word en ESPAÑOL del trimestre ANTERIOR (el mismo
-    'Word base a actualizar' que ya se sube en la sección en español de la app — no hace falta
-    subirlo de nuevo acá) — se usa como punto de comparación.
+# Convierte cifras en formato chileno/español (punto = miles, coma = decimales) al formato en-US
+# (coma = miles, punto = decimales) ANTES de mandar el texto a DeepL — no se le confía ese cambio a
+# DeepL (es un traductor de texto, no un formateador de números: podría dejar la coma/punto tal cual
+# vino, o interpretarlo mal), así el número que DeepL ve y traduce ya llega en el formato correcto y
+# lo deja igual (los traductores no suelen tocar dígitos). Verificado con cifras reales del Excel de
+# junio 2026: "107,81" -> "107.81", "1.239.108" -> "1,239,108", "1.239.108,50" -> "1,239,108.50",
+# "6,10%" -> "6.10%".
+_ES_NUMBER_RE = re.compile(r'\b\d{1,3}(?:\.\d{3})+(?:,\d+)?\b|\b\d+,\d+\b')
 
-    A pedido explícito de Melissa, esto NO traduce línea por línea sin más: compara, párrafo por
-    párrafo, el texto libre de ESTE trimestre contra el del Word en español del trimestre ANTERIOR
-    (alineando por CONTENIDO dentro de cada tramo, no por posición fija — ver _align comentario más
-    abajo), y **solo** manda a traducir los párrafos que de verdad cambiaron. Un párrafo libre sin
-    cambios de redacción respecto al trimestre pasado se deja tal cual está en el Word en inglés (su
-    traducción ya fue aprobada y usada en informes anteriores; no hay razón para reemplazarla por
-    una traducción nueva de DeepL, que podría usar una redacción distinta aunque diga lo mismo). Si
-    no se puede comparar en absoluto (no se subió el Word en español anterior, o no abre, o el tramo
-    es nuevo y no existía el trimestre pasado), se trata todo el tramo como 'cambiado' y se traduce
-    de todos modos — mejor eso que dejar pasar un cambio real sin avisar."""
+def _es_number_to_en(m):
+    s = m.group(0)
+    if '.' in s and ',' in s:
+        int_part, dec_part = s.rsplit(',', 1)
+        return f"{int_part.replace('.', ',')}.{dec_part}"
+    elif '.' in s:
+        return s.replace('.', ',')
+    elif ',' in s:
+        return s.replace(',', '.')
+    return s
+
+def convert_es_numbers_to_en(text):
+    return _ES_NUMBER_RE.sub(_es_number_to_en, text)
+
+# Mismo patrón que _ES_NUMBER_RE, pero para leer números YA en formato en-US (coma = miles, punto =
+# decimales) de vuelta — se usa para ubicar, dentro de una oración en inglés ya aprobada el trimestre
+# pasado, dónde están las cifras para reemplazarlas por las nuevas (ver _NUM_PLACEHOLDER más abajo).
+_EN_NUMBER_RE = re.compile(r'\b\d{1,3}(?:,\d{3})+(?:\.\d+)?\b|\b\d+\.\d+\b')
+
+# Pedido explícito de Melissa (oct-2026): "no quiero que la mayor parte del texto esté en amarillo.
+# Es normal que las cifras cambien de un trimestre a otro." Antes, CUALQUIER diferencia de texto
+# contra el trimestre anterior —incluido que una cifra cambiara, que es lo normal y esperado cada
+# trimestre— mandaba la oración completa a traducir de nuevo vía DeepL y la resaltaba en amarillo
+# para que la revisara, aunque la REDACCIÓN fuera exactamente la misma de siempre. Ahora, antes de
+# tratar una oración como "cambiada", se compara su "plantilla" (el mismo texto, pero con cada cifra
+# reemplazada por un comodín) contra la plantilla de la MISMA oración el trimestre anterior: si
+# calzan (la redacción es idéntica y solo cambiaron las cifras, que es el caso normal de cada
+# trimestre), se reutiliza la redacción en inglés YA aprobada el trimestre pasado, reemplazando sus
+# cifras (en el mismo orden) por las nuevas del español de este trimestre — sin volver a llamar a
+# DeepL y SIN resaltar en amarillo, porque la redacción nunca pasó por un traductor: las cifras salen
+# directo del Word en español definitivo, igual que el resto del mecanismo. Solo si la plantilla en sí
+# cambió (se agregó una causa, se reescribió la frase, cambió la cantidad de cifras mencionadas) se
+# traduce de nuevo vía DeepL y se resalta, porque ahí sí hay redacción nueva que verificar.
+_NUM_PLACEHOLDER = "\x00NUM\x00"
+
+def _mask_numbers_es(text):
+    return _ES_NUMBER_RE.sub(_NUM_PLACEHOLDER, text)
+
+def _substitute_numbers_in_order(old_en_text, new_numbers_en):
+    """Reemplaza, en orden de aparición, cada cifra de `old_en_text` (formato en-US) por la
+    siguiente de `new_numbers_en` — se usa solo cuando ya se confirmó que la plantilla (texto sin
+    cifras) es idéntica a la del trimestre anterior, así que la cantidad de cifras calza 1 a 1."""
+    it = iter(new_numbers_en)
+    def _repl(m):
+        return next(it, m.group(0))
+    return _EN_NUMBER_RE.sub(_repl, old_en_text)
+
+def _flatten(segments):
+    return [p for seg in segments for p in seg]
+
+def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_base_path, log,
+                                            periods=None, old_periods=None):
+    """Ver docstring de la sección de arriba. doc_en: el Word en inglés ya abierto (todavía con el
+    texto en inglés del trimestre ANTERIOR tal cual el Word base subido, salvo encabezados/fechas y
+    Flujo de Efectivo, ya actualizados antes de llamar a esto — ver generate_en). word_es_edited_path:
+    ruta al Word en español definitivo de ESTE trimestre (obligatorio). word_es_base_path: ruta al
+    Word en ESPAÑOL del trimestre ANTERIOR (opcional pero muy recomendado: es lo que permite reusar
+    traducciones ya aprobadas en vez de traducir todo de nuevo cada vez). periods/old_periods: los
+    diccionarios de períodos EN INGLÉS (periods_en.derive_periods_en / derive_old_periods_from_title_en)
+    ya calculados en generate_en() — se usan solo para la coincidencia "misma redacción, cifras
+    actualizadas" (ver template_lookup más abajo), para poder además actualizar menciones sueltas de
+    Dec25/S24-25/etc. dentro de esa redacción reutilizada."""
     try:
         doc_es = docx.Document(word_es_edited_path)
     except Exception as ex:
-        log.append(f"[ERROR] (EN) No pude abrir el Word en español definitivo para la traducción general de texto libre: {ex}")
+        log.append(f"[ERROR] (EN) No pude abrir el Word en español definitivo para traducir el texto narrativo: {ex}")
         return
 
-    anchors_es = [re.compile(a) for a, _ in ASM_ES.SINGLE_TEMPLATES] + [re.compile(a) for a, _ in ASM_ES.HEADER_TEMPLATES]
-    anchors_en = [re.compile(a) for a, _ in SINGLE_TEMPLATES_EN] + [re.compile(a) for a, _ in HEADER_TEMPLATES_EN]
+    # periods_es_curr / periods_es_prev: los mismos períodos de arriba pero en ESPAÑOL (Dic25, T25/26,
+    # etc.), derivados del título de cada Word en español ("Al dd de mes de yyyy"). Se usan para
+    # reescribir, dentro de una oración del trimestre ANTERIOR, cualquier mención de sus propias
+    # etiquetas de período por las de ESTE trimestre antes de compararla (enmascarando además las
+    # cifras) contra la oración actual — así "el EBITDA a Dic25 alcanzó..." y "el EBITDA a Jun26
+    # alcanzó..." se reconocen como la MISMA redacción con cifras/período actualizados, en vez de cómo
+    # texto nuevo (ver template_lookup más abajo). Sin esto, toda oración que menciona el período
+    # (la gran mayoría) fallaba esta coincidencia solo por el cambio de "Dic25" a "Jun26", aunque el
+    # resto de la frase fuera idéntica.
+    periods_es_curr = None
+    try:
+        _, _title_es_curr = ASM_ES.find_paragraph(doc_es, r"^Al \d+ de \w+ de \d+\s*$")
+        if _title_es_curr is not None:
+            periods_es_curr = ASM_ES.P.derive_old_periods_from_title(_title_es_curr.text)
+    except Exception:
+        periods_es_curr = None
 
-    runs_es = _classify_free_runs(doc_es, anchors_es, ASM_ES._is_list_para)
-    runs_en = _classify_free_runs(doc_en, anchors_en, _is_list_para)
+    header_anchors_es = [re.compile(a) for a, _ in ASM_ES.HEADER_TEMPLATES]
+    header_anchors_en = [re.compile(a) for a, _ in HEADER_TEMPLATES_EN]
 
-    n_es, n_en = len(runs_es), len(runs_en)
+    segs_es = _segment_narrative(doc_es, header_anchors_es)
+    segs_en = _segment_narrative(doc_en, header_anchors_en)
+
+    n_es, n_en = len(segs_es), len(segs_en)
     n_common = min(n_es, n_en)
     if n_es != n_en:
         log.append(
-            f"[AVISO] (EN) La cantidad de tramos de texto libre no calzó entre el Word en español "
-            f"definitivo ({n_es} tramos) y el Word en inglés generado ({n_en} tramos): se alinearon "
-            f"los primeros {n_common} tramos en el mismo orden en que aparecen en cada documento. "
-            "Revisa a mano el resto del documento en inglés (puede deberse a un párrafo nuevo, "
-            "borrado o fusionado en alguno de los dos idiomas este trimestre)."
+            f"[AVISO] (EN) La cantidad de segmentos de texto narrativo no calzó entre el Word en "
+            f"español definitivo ({n_es}) y el Word en inglés base ({n_en}): se alinearon los "
+            f"primeros {n_common} segmentos en el mismo orden en que aparecen en cada documento. "
+            "Revisa a mano el resto del documento en inglés (puede deberse a un párrafo/viñeta nueva, "
+            "borrada o fusionada en alguno de los dos idiomas este trimestre)."
+        )
+    if n_en and n_common / n_en < 0.5:
+        log.append(
+            "[ALERTA] (EN) Menos de la mitad de la estructura del Word en inglés base calzó con la "
+            "del Word en español definitivo. Esto casi siempre significa que el 'Word base en inglés "
+            "del trimestre anterior' que subiste no es el correcto (revisa que esté en inglés y "
+            "mantenga la misma estructura de siempre) — el documento generado probablemente quedó "
+            "con la mayor parte del texto narrativo sin traducir bien."
         )
 
-    # Punto de comparación: el mismo texto libre, pero del Word en español del trimestre ANTERIOR
-    # (runs_es_prev), alineado tramo-por-tramo por posición ordinal igual que runs_es con runs_en (el
-    # tramo libre n-ésimo de este trimestre contra el tramo libre n-ésimo del anterior). Si no se
-    # puede abrir o no se pasó la ruta, runs_es_prev queda vacío y todo se trata como 'cambiado' (se
-    # traduce igual que si no hubiera punto de comparación).
-    #
-    # OJO: DENTRO de cada tramo, los párrafos de este trimestre YA NO se comparan por posición fija
-    # contra los del trimestre anterior (k-ésimo contra k-ésimo) — se alinean por CONTENIDO con
-    # difflib (igual que un diff de texto). Motivo (reportado por Melissa, oct-2026): el tramo de
-    # Riesgos/exposición cambiaria es, por lejos, el más largo del documento (9-10 párrafos cortos
-    # seguidos) y es justo donde casi siempre se agrega, reescribe o borra algún párrafo de un
-    # trimestre a otro — con la comparación por posición fija, EN CUANTO la cantidad de párrafos de
-    # ese tramo no calzaba exacto (por un solo párrafo nuevo en medio, aunque todos los demás
-    # quedaran idénticos), el código de respaldo trataba TODO el tramo como 'cambiado' y volvía a
-    # traducir y resaltar en amarillo la sección de Riesgos COMPLETA — esto es lo que Melissa vio
-    # como "la sección de riesgos siempre queda resaltada entera" aunque ella sintiera que casi nada
-    # había cambiado. Verificado con los Word reales de la Sociedad (jun-2026 vs dic-2025): el tramo
-    # de Riesgos tenía 9-10 párrafos en un trimestre contra 1 en el otro por este mismo efecto de
-    # desfase en cascada. Con difflib, un párrafo agregado/borrado/reescrito en medio del tramo solo
-    # marca ESE párrafo como cambiado; el resto, aunque se haya corrido de posición dentro del tramo,
-    # se sigue reconociendo como "sin cambios" si el texto es idéntico — igual que lo que Melissa
-    # pidió ("la app debe... identificar las variaciones", no volver a marcar todo por un cambio
-    # puntual). Este reordenamiento NO afecta la alineación runs_es<->runs_en de más arriba (esa sigue
-    # siendo por posición ordinal, ya verificada a mano que calza 1 a 1 entre español e inglés).
-    runs_es_prev = []
+    # Diccionario de traducciones ya aprobadas (trimestre anterior): texto en español anterior
+    # (normalizado) -> texto en inglés que YA tiene el Word en inglés en esa misma posición (que es,
+    # segmento por segmento, la traducción aprobada de ese español anterior). Se arma ANTES de tocar
+    # nada en doc_en (que es justo lo que trae ahora: el inglés del trimestre pasado).
+    segs_es_prev = []
+    periods_es_prev = None
     if word_es_base_path:
         try:
             doc_es_prev = docx.Document(word_es_base_path)
-            runs_es_prev = _classify_free_runs(doc_es_prev, anchors_es, ASM_ES._is_list_para)
+            segs_es_prev = _segment_narrative(doc_es_prev, header_anchors_es)
+            try:
+                _, _title_es_prev = ASM_ES.find_paragraph(doc_es_prev, r"^Al \d+ de \w+ de \d+\s*$")
+                if _title_es_prev is not None:
+                    periods_es_prev = ASM_ES.P.derive_old_periods_from_title(_title_es_prev.text)
+            except Exception:
+                periods_es_prev = None
         except Exception as ex:
             log.append(
-                "[AVISO] (EN) No pude abrir el Word en español del trimestre anterior para comparar "
-                f"qué texto libre cambió: {ex}. Se tratará todo el texto libre como 'cambiado' (se "
-                "traduce igual que si no hubiera punto de comparación)."
+                "[AVISO] (EN) No pude abrir el Word en español del trimestre anterior para reusar "
+                f"traducciones ya aprobadas: {ex}. Se traducirá todo el texto narrativo de nuevo."
             )
     else:
         log.append(
-            "[AVISO] (EN) No tengo el Word en español del trimestre anterior para comparar (súbelo en "
-            "el campo 'Word en ESPAÑOL del TRIMESTRE ANTERIOR' de esta misma sección, o en el 'Word "
-            "base a actualizar' de la sección en español de arriba): se tratará todo el texto libre "
-            "como 'cambiado' y se traducirá por completo, en vez de traducir solo lo que varió."
+            "[AVISO] (EN) No tengo el Word en español del trimestre anterior (sección en inglés, "
+            "campo 'Word en ESPAÑOL del TRIMESTRE ANTERIOR', o reutilizado del 'Word base a "
+            "actualizar' de la sección en español): se traducirá TODO el texto narrativo de nuevo en "
+            "vez de reusar traducciones ya aprobadas — puede hacer que términos que antes se "
+            "tradujeron de una forma salgan con una redacción levemente distinta esta vez."
         )
 
-    # Alineación por CONTENIDO (ver comentario "OJO" más arriba), no por tramo+posición: en vez de
-    # comparar el tramo n-ésimo de este trimestre contra el tramo n-ésimo del anterior (y dentro de
-    # cada uno, párrafo k-ésimo contra k-ésimo), se compara TODO el texto libre de este trimestre
-    # (todos los tramos, en orden, uno detrás de otro) contra TODO el texto libre del trimestre
-    # anterior, con un solo difflib sobre esa secuencia completa. Esto hacía falta porque, además de
-    # que la CANTIDAD de párrafos dentro de un mismo tramo puede no calzar entre trimestres (un
-    # párrafo agregado/borrado), la cantidad de TRAMOS en sí tampoco calza siempre 1 a 1 entre
-    # trimestres (ej. si un párrafo nuevo queda pegado a una plantilla reconocida en un trimestre
-    # pero no en otro, se corre el conteo de tramos de ahí en adelante) — verificado con los Word
-    # reales de la Sociedad (jun-2026 vs dic-2025): el bloque de Riesgos tenía 46 tramos libres en un
-    # trimestre contra 48 en el otro, y la comparación tramo-por-tramo quedaba completamente
-    # desalineada a partir de ahí (comparaba contenido de Riesgos de crédito contra un párrafo de
-    # Flujo de Caja, por ejemplo), lo que hacía que CASI TODO el bloque de Riesgos quedara marcado
-    # 'cambiado' por error. Comparando el texto libre completo de corrido, difflib encuentra los
-    # bloques realmente idénticos sin importar en qué tramo haya quedado cada uno este trimestre.
-    _flat_es = []  # [(run_idx, k), ...] en orden de documento, uno por párrafo libre de este trimestre
-    for _ridx, _es_paras in enumerate(runs_es):
-        for _k in range(len(_es_paras)):
-            _flat_es.append((_ridx, _k))
-    _flat_es_norm = [_normalize_for_diff(runs_es[_ridx][_k].text) for (_ridx, _k) in _flat_es]
-    _flat_prev_norm = [_normalize_for_diff(p.text) for _prev_paras in runs_es_prev for p in _prev_paras]
-
-    _unchanged_lookup = {}
-    if _flat_prev_norm:
-        _matcher = difflib.SequenceMatcher(a=_flat_prev_norm, b=_flat_es_norm, autojunk=False)
-        for tag, i1, i2, j1, j2 in _matcher.get_opcodes():
-            if tag == 'equal':
-                for off in range(i2 - i1):
-                    _unchanged_lookup[_flat_es[j1 + off]] = True
+    flat_es_prev = _flatten(segs_es_prev)
+    flat_en_prev_state = _flatten(segs_en)  # todavía sin tocar: es el inglés del trimestre anterior
+    old_lookup = {}
+    # template_lookup: igual que old_lookup, pero con las cifras de cada oración enmascaradas (ver
+    # _mask_numbers_es) — permite reconocer "misma redacción, cifras distintas" (el caso normal de
+    # cada trimestre) y reutilizar la redacción en inglés ya aprobada con las cifras actualizadas, en
+    # vez de tratarlo como texto nuevo (ver docstring de _NUM_PLACEHOLDER más arriba).
+    template_lookup = {}
+    _can_sweep_periods_es = periods_es_prev is not None and periods_es_curr is not None
+    for j in range(min(len(flat_es_prev), len(flat_en_prev_state))):
+        es_prev_text = flat_es_prev[j].text
+        en_prev_text = flat_en_prev_state[j].text
+        key = _normalize_for_diff(es_prev_text)
+        if key:
+            old_lookup[key] = en_prev_text
+            # Para el template (ver docstring de la función): primero se reescriben, dentro de la
+            # oración ANTERIOR, sus propias menciones de período (Dic25, T24/25, etc.) por las de ESTE
+            # trimestre — igual mecanismo que sweep_text/apply_global_sweep, ya probado en el resto del
+            # pipeline — y RECIÉN AHÍ se enmascaran las cifras. Así, una oración que solo cambió en
+            # período y cifras calza con la de este trimestre aunque mencione el período explícitamente
+            # (el caso más común: "el EBITDA a Dic25 alcanzó..." / "el EBITDA a Jun26 alcanzó...").
+            swept_prev_text = (
+                ASM_ES.P.sweep_text(es_prev_text, periods_es_prev, periods_es_curr)
+                if _can_sweep_periods_es else es_prev_text
+            )
+            template_key = _mask_numbers_es(_normalize_for_diff(swept_prev_text))
+            if template_key != key:  # solo vale la pena si de verdad había alguna cifra/período
+                template_lookup[template_key] = (es_prev_text, en_prev_text)
 
     deepl_on = DT.is_configured()
+    n_reused = 0
+    n_numbers_updated = 0
     n_translated = 0
     n_fallback = 0
-    n_fallback_failed = 0  # de n_fallback: cuántos fueron porque DeepL SÍ estaba configurado pero falló (no por falta de key)
-    n_unchanged = 0
-    n_paras_mismatch = 0
-    n_runs_no_prev = 0
-    deepl_error_reasons = []  # motivos únicos de falla vistos esta corrida (ver DT.get_last_error())
+    n_fallback_failed = 0
+    n_segs_mismatch = 0
+    deepl_error_reasons = []
 
-    for run_idx in range(n_common):
-        es_paras = runs_es[run_idx]
-        en_paras = runs_en[run_idx]
-        if len(es_paras) != len(en_paras):
-            n_paras_mismatch += 1
+    for i in range(n_common):
+        es_items = segs_es[i]
+        en_items = segs_en[i]
+        if len(es_items) != len(en_items):
+            n_segs_mismatch += 1
 
-        prev_paras = runs_es_prev[run_idx] if run_idx < len(runs_es_prev) else None
-        if prev_paras is None:
-            n_runs_no_prev += 1
-
-        new_texts = []
-        for k, p_es in enumerate(es_paras):
+        target_texts = []
+        for p_es in es_items:
             es_text = p_es.text.strip()
-
-            if _unchanged_lookup.get((run_idx, k), False):
-                new_texts.append(None)  # None = no tocar este párrafo en inglés
-                n_unchanged += 1
+            key = _normalize_for_diff(es_text)
+            old_text = old_lookup.get(key)
+            if old_text is not None:
+                target_texts.append(old_text)
+                n_reused += 1
                 continue
 
-            translated = DT.translate_es_en(es_text) if deepl_on else None
+            # ¿Misma redacción que el trimestre pasado, solo con cifras distintas? (ver docstring de
+            # _NUM_PLACEHOLDER) — si calza, no hace falta DeepL ni resaltar: las cifras nuevas salen
+            # directo de este mismo párrafo en español, igual que el resto del mecanismo.
+            template_hit = template_lookup.get(_mask_numbers_es(key))
+            if template_hit is not None:
+                _, old_en_text = template_hit
+                # Antes de sustituir las cifras, se barren también las menciones de período en INGLÉS
+                # de esta redacción aprobada (Dec25, S24/25, etc. -> las de este trimestre) — mismo
+                # mecanismo que apply_global_sweep, aplicado acá a esta oración puntual, porque viene de
+                # la traducción aprobada del trimestre ANTERIOR y puede mencionar su propio período.
+                old_en_text_swept = (
+                    P.sweep_text_en(old_en_text, old_periods, periods)
+                    if (periods is not None and old_periods is not None) else old_en_text
+                )
+                new_numbers_en = _EN_NUMBER_RE.findall(convert_es_numbers_to_en(es_text))
+                old_numbers_en = _EN_NUMBER_RE.findall(old_en_text_swept)
+                if len(new_numbers_en) == len(old_numbers_en):
+                    target_texts.append(_substitute_numbers_in_order(old_en_text_swept, new_numbers_en))
+                    n_numbers_updated += 1
+                    continue
+                # cantidad de cifras no calza (caso raro): no se puede sustituir con confianza, se
+                # sigue de largo al camino normal de traducir de nuevo.
+
+            translated = DT.translate_es_en(convert_es_numbers_to_en(es_text)) if deepl_on else None
             if translated:
-                new_texts.append(f"[[{DEEPL_PROPOSAL_PREFIX_EN}{_sanitize_for_markup(translated)}]]")
+                target_texts.append(f"[[{DEEPL_PROPOSAL_PREFIX_EN}{_sanitize_for_markup(translated)}]]")
                 n_translated += 1
             elif deepl_on:
-                # Configurado pero esta llamada puntual falló: distinto de "no configurado" (ver
-                # NO_DEEPL_FAILED_PREFIX_EN arriba) — se deja constancia del motivo real.
-                new_texts.append(f"[[{NO_DEEPL_FAILED_PREFIX_EN}{_sanitize_for_markup(es_text)}]]")
+                target_texts.append(f"[[{NO_DEEPL_FAILED_PREFIX_EN}{_sanitize_for_markup(es_text)}]]")
                 n_fallback += 1
                 n_fallback_failed += 1
                 reason = DT.get_last_error()
                 if reason and reason not in deepl_error_reasons:
                     deepl_error_reasons.append(reason)
             else:
-                new_texts.append(f"[[{NO_DEEPL_PREFIX_EN}{_sanitize_for_markup(es_text)}]]")
+                target_texts.append(f"[[{NO_DEEPL_PREFIX_EN}{_sanitize_for_markup(es_text)}]]")
                 n_fallback += 1
 
-        if len(es_paras) == len(en_paras) and all(t is None for t in new_texts):
-            continue  # todo el tramo quedó sin cambios: no tocar nada en inglés
-        # _replace_list_items regenera cada párrafo que recibe texto; para los que quedaron en None
-        # (sin cambios) se reutiliza su propio texto actual tal cual, para no tocarlos.
-        final_texts = [
-            (new_texts[k] if k < len(new_texts) and new_texts[k] is not None else en_paras[min(k, len(en_paras) - 1)].text)
-            for k in range(len(new_texts))
-        ]
-        _replace_list_items(en_paras, final_texts)
+        _replace_list_items(en_items, target_texts)
 
-    if n_common:
+    total = n_reused + n_numbers_updated + n_translated + n_fallback
+    if total:
         msg = (
-            f"[OK] (EN) Texto libre (no cubierto por plantillas ni causas de negocio) comparado contra "
-            f"el Word en español definitivo en {n_common} tramo(s): {n_unchanged} párrafo(s) sin "
-            f"cambios respecto al trimestre anterior (se dejó el inglés tal cual estaba), "
-            f"{n_translated} traducido(s) vía DeepL por haber cambiado"
+            f"[OK] (EN) Texto narrativo (todo el documento, salvo encabezados/fechas, Flujo de "
+            f"Efectivo y tablas) comparado contra el Word en español definitivo en {n_common} "
+            f"segmento(s), {total} oración(es)/viñeta(s) en total: {n_reused} sin cambios (misma "
+            f"redacción y cifras que el trimestre anterior), {n_numbers_updated} con la misma "
+            "redacción ya aprobada pero cifras actualizadas (no necesitan revisión — las cifras "
+            f"nuevas salen directo del español definitivo), {n_translated} con redacción nueva o "
+            "distinta, traducida(s) vía DeepL"
         )
         if n_fallback:
-            msg += f", {n_fallback} dejado(s) en español pendiente de traducir a mano"
-        msg += ". Lo traducido queda resaltado en amarillo para que lo verifiques antes de publicar."
+            msg += f", {n_fallback} dejada(s) en español pendiente de traducir a mano"
+        msg += ". Solo lo traducido por redacción nueva queda resaltado en amarillo para que lo verifiques."
         log.append(msg)
         if not deepl_on and n_fallback:
             log.append(
-                "[AVISO] (EN) DeepL no está configurado (falta DEEPL_API_KEY en los Secrets de la app): "
-                "el texto libre que sí cambió respecto al trimestre anterior quedó en español, "
-                "resaltado, pendiente de traducir a mano."
+                "[AVISO] (EN) DeepL no está configurado (falta DEEPL_API_KEY en los Secrets de la "
+                "app): el texto narrativo nuevo o que cambió respecto al trimestre anterior quedó en "
+                "español, resaltado, pendiente de traducir a mano."
             )
         if deepl_on and n_fallback_failed:
-            # Distinto del caso de arriba: la API key SÍ está configurada, pero la(s) llamada(s) a
-            # DeepL fallaron igual — mostrar el motivo real para que Melissa sepa qué revisar (no
-            # es "configúrala de nuevo", es un problema puntual: key inválida, cuota, red, etc.).
             motivos = "; ".join(deepl_error_reasons) if deepl_error_reasons else "motivo no disponible"
-            # Tag propio [ALERTA-DEEPL] (no [ALERTA]): ese otro tag ya lo usa count_anchor_misses
-            # para avisar de un Word base equivocado, y app.py muestra un mensaje específico de
-            # "Word equivocado" para [ALERTA] — mezclar los dos acá mostraría ese mensaje erróneo
-            # para lo que en realidad es un problema de DeepL.
             log.append(
                 f"[ALERTA-DEEPL] (EN) DeepL está configurado, pero {n_fallback_failed} traducción(es) "
                 f"fallaron igual. Motivo reportado por DeepL: {motivos}. Esos párrafos quedaron en "
@@ -1081,20 +1177,14 @@ def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_
                 "de DeepL (¿está verificada/activada? ¿tiene cuota disponible?)."
             )
     else:
-        log.append("[AVISO] (EN) No encontré ningún tramo de texto libre para comparar/traducir.")
-    if n_paras_mismatch:
+        log.append("[AVISO] (EN) No encontré ningún segmento de texto narrativo para comparar/traducir.")
+    if n_segs_mismatch:
         log.append(
-            f"[AVISO] (EN) {n_paras_mismatch} de los {n_common} tramos alineados tenían distinta "
-            "cantidad de párrafos entre español e inglés (se agregaron o quitaron párrafos en inglés "
-            "para que calce la cantidad) — revisa esos tramos con más atención."
+            f"[AVISO] (EN) {n_segs_mismatch} de los {n_common} segmentos alineados tenían distinta "
+            "cantidad de párrafos/viñetas entre español e inglés (se agregaron o quitaron viñetas en "
+            "inglés para que calce la cantidad) — revisa esos segmentos con más atención."
         )
-    if n_runs_no_prev and runs_es_prev:
-        log.append(
-            f"[AVISO] (EN) {n_runs_no_prev} de los {n_common} tramos de texto libre no tenían un tramo "
-            "correspondiente en el Word en español del trimestre anterior con la misma cantidad de "
-            "párrafos (posiblemente texto nuevo este trimestre): se tradujeron por completo, sin "
-            "poder comparar qué parte específica cambió."
-        )
+
 
 def generate_en(excel_path, word_path, out_path, word_es_edited_path, word_es_base_path=None):
     if not word_es_edited_path:
@@ -1113,15 +1203,17 @@ def generate_en(excel_path, word_path, out_path, word_es_edited_path, word_es_ba
     _, _title_para = find_paragraph(doc, r"^As of \w+ \d+, \d+\s*$")
     old_periods = P.derive_old_periods_from_title_en(_title_para.text) if _title_para is not None else None
 
-    causes = collect_original_causes(doc, log)
-    _merge_causes_from_edited_es(causes, wb, word_es_edited_path, log)
+    # collect_original_causes / _merge_causes_from_edited_es / apply_single_templates /
+    # apply_bridge_bullets YA NO SE LLAMAN (ver docstring de translate_narrative_from_definitive_es,
+    # más arriba): el texto narrativo con cifras y causas de negocio ahora sale de traducir
+    # literalmente el Word en español definitivo, no de recalcular una plantilla en inglés aparte —
+    # eso es justo lo que eliminó el descalce de cifras que reportó Melissa (oct-2026).
     apply_header_templates(doc, periods, log)
-    apply_single_templates(doc, wb, periods, causes, log)
-    apply_bridge_bullets(doc, wb, periods, causes, log)
     apply_global_sweep(doc, old_periods, periods, log)
     update_flujo_caja_table_en(doc, wb, log)
     remove_stale_risk_table_en(doc, log)
-    translate_free_text_from_definitive_es(doc, word_es_edited_path, word_es_base_path, log)
+    translate_narrative_from_definitive_es(doc, word_es_edited_path, word_es_base_path, log,
+                                            periods=periods, old_periods=old_periods)
 
     image_map, img_dir = collect_and_render_tables_en(wb, word_path, log, doc=doc)
     from assemble import fix_image_frame_sizes, swap_media_bytes
@@ -1134,14 +1226,18 @@ def generate_en(excel_path, word_path, out_path, word_es_edited_path, word_es_ba
     os.unlink(tmp_text_docx)
     shutil.rmtree(img_dir)
 
-    # Mismo chequeo que assemble.count_anchor_misses, para el lado en inglés: si casi ninguna ancla
-    # de texto calzó (ej. porque se subió por error el Word en ESPAÑOL como "Word base en inglés del
-    # trimestre anterior"), avisar fuerte en vez de dejarlo pasar con el texto narrativo sin traducir.
+    # Mismo chequeo que assemble.count_anchor_misses, para el lado en inglés: si casi ningún
+    # encabezado/fecha calzó (ej. porque se subió por error el Word en ESPAÑOL como "Word base en
+    # inglés del trimestre anterior"), avisar fuerte en vez de dejarlo pasar. Antes este chequeo
+    # también contaba las ~30 plantillas de SINGLE_TEMPLATES_EN (de ahí el umbral de 10); ahora que
+    # esas ya no se usan (ver arriba), solo quedan los 7 encabezados de HEADER_TEMPLATES_EN — el
+    # chequeo de estructura narrativa completa (segmentos) ya lo hace translate_narrative_from_
+    # definitive_es con su propio [ALERTA] cuando corresponde.
     misses = sum(1 for l in log if 'No encontré párrafo' in l)
     hits = sum(1 for l in log if l.startswith('[OK] (EN) Actualizado'))
-    if misses + hits >= 10 and misses / (misses + hits) >= 0.5:
+    if misses + hits >= 3 and misses / (misses + hits) >= 0.5:
         log.append(
-            f"[ALERTA] (EN) De {misses + hits} frases/encabezados que la app busca por texto en el "
+            f"[ALERTA] (EN) De {misses + hits} encabezados/fechas que la app busca por texto en el "
             f"Word base en inglés, {misses} NO se encontraron. Esto casi siempre significa que el "
             "Word subido en 'Word base en inglés del trimestre anterior' no es el correcto (revisa "
             "que esté en inglés y mantenga la misma estructura de siempre) — el documento generado "
