@@ -876,6 +876,150 @@ def _segment_narrative(doc, header_anchors):
         segments.append(cur_list)
     return segments
 
+def _segment_signature(seg):
+    # Solo describe la FORMA del segmento (racha de viñetas vs párrafo normal), nunca su contenido —
+    # el contenido siempre sale del español (old_lookup/template_lookup/DeepL, ver más abajo). Se usa
+    # solo para decidir cuántos segmentos de cada tipo hacen falta (ver _align_segments).
+    #
+    # Nota: se probó además distinguir párrafos normales por un bucket de largo de texto (para
+    # desambiguar dos párrafos normales consecutivos sin ninguna viñeta cerca que sirva de ancla, ej.
+    # el título del documento) pero empeoró MUCHO el resultado real: el español es sistemáticamente
+    # ~15-25% más largo que su traducción al inglés, así que casi ningún párrafo quedaba en el mismo
+    # bucket que su propia traducción, aunque fuera exactamente la misma oración — se revirtió.
+    return 'L' if _is_list_para(seg[0]) else 'N'
+
+def _clone_paragraph_after(anchor_para, n=1):
+    """Clona `anchor_para` (su mismo estilo/formato) `n` veces, insertando los clones inmediatamente
+    después de `anchor_para`. Devuelve la lista de los nuevos objetos Paragraph (todavía con el texto
+    de `anchor_para`; el texto real se setea aparte vía set_paragraph_text). Mismo mecanismo que ya
+    usa _replace_list_items para agregar viñetas de más, generalizado acá a cualquier párrafo."""
+    new_paras = []
+    last_el = anchor_para._p
+    for _ in range(n):
+        new_el = copy.deepcopy(last_el)
+        last_el.addnext(new_el)
+        new_paras.append(docx.text.paragraph.Paragraph(new_el, anchor_para._parent))
+        last_el = new_el
+    return new_paras
+
+def _clone_paragraph_before(anchor_para, n=1):
+    """Como _clone_paragraph_after, pero insertando los clones ANTES de `anchor_para` (en orden). Se
+    usa cuando el segmento nuevo aparece antes de cualquier párrafo en inglés todavía visto (ej. el
+    documento empieza con un párrafo nuevo) y por eso no hay un párrafo previo del cual clonar hacia
+    adelante — se clona el primer párrafo del documento en inglés y se inserta antes de él, para no
+    perder el contenido ni el orden."""
+    new_paras = []
+    anchor_el = anchor_para._p
+    for _ in range(n):
+        new_el = copy.deepcopy(anchor_el)
+        anchor_el.addprevious(new_el)
+        new_paras.append(docx.text.paragraph.Paragraph(new_el, anchor_para._parent))
+    return new_paras
+
+def _remove_segment(seg):
+    for p in seg:
+        p._p.getparent().remove(p._p)
+
+def _align_segments(segs_es, segs_en, log):
+    """Empareja los segmentos de `segs_es` (Word en español DEFINITIVO de este trimestre) con los de
+    `segs_en` (Word en inglés base) para decidir, segmento por segmento, en qué párrafo(s) de doc_en
+    escribir cada oración/viñeta traducida.
+
+    ANTES (versión anterior): se emparejaba por POSICIÓN directa (segs_es[i] con segs_en[i], hasta
+    min(len(segs_es), len(segs_en))). Eso es MUY frágil: un solo párrafo de más o de menos en
+    CUALQUIER parte de alguno de los dos documentos (típico en Word mantenidos a mano trimestre a
+    trimestre — ej. un título partido en 2 líneas un trimestre y en 1 línea otro) desalinea TODO lo
+    que viene después para el resto del documento, mezclando el texto de una oración con el párrafo
+    de OTRA — así se generaron los "datos rarísimos" que reportó Melissa en oct-2026 (párrafos con
+    cifras de trimestres distintos apareciendo duplicados, uno al lado del otro).
+
+    AHORA: se comparan las FIRMAS estructurales de ambos (_segment_signature: 'L' viñetas / 'N'
+    párrafo normal) con difflib, igual que ya se hace para detectar qué cambió en una lista de
+    oraciones — así un párrafo de más o de menos en cualquier parte solo desalinea ESE tramo puntual
+    (se detecta como 'insert'/'delete'/'replace' local), nunca el resto del documento. Cuando a
+    `segs_es` le sobra un segmento sin contraparte en inglés (párrafo nuevo este trimestre), se CLONA
+    el último párrafo en inglés visto (mismo mecanismo de clonado que ya usa _replace_list_items) para
+    poder escribir ahí con el formato correcto. Cuando a `segs_en` le sobra un segmento sin
+    contraparte en español (quedó obsoleto / ya no existe este trimestre), se BORRA del documento en
+    vez de dejarlo tal cual (que es justo lo que producía el dato viejo duplicado)."""
+    sig_es = [_segment_signature(s) for s in segs_es]
+    sig_en = [_segment_signature(s) for s in segs_en]
+    sm = difflib.SequenceMatcher(None, sig_en, sig_es, autojunk=False)
+
+    first_en_para = segs_en[0][0] if segs_en else None
+
+    pairs = []
+    n_equal = 0
+    n_inserted = 0
+    n_deleted = 0
+    last_en_para = None
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == 'equal':
+            for k in range(i2 - i1):
+                pairs.append((segs_es[j1 + k], segs_en[i1 + k]))
+                last_en_para = segs_en[i1 + k][-1]
+                n_equal += 1
+            continue
+        n_en_here = i2 - i1
+        n_es_here = j2 - j1
+        n_both = min(n_en_here, n_es_here)
+        for k in range(n_both):
+            pairs.append((segs_es[j1 + k], segs_en[i1 + k]))
+            last_en_para = segs_en[i1 + k][-1]
+        if n_en_here > n_both:
+            # Sobran segmentos en inglés sin contraparte en español este trimestre: se borran (en vez
+            # de dejarlos tal cual, con datos de un trimestre que ya no corresponde).
+            for k in range(i1 + n_both, i2):
+                _remove_segment(segs_en[k])
+                n_deleted += 1
+        elif n_es_here > n_both:
+            # Sobran segmentos en español sin contraparte en inglés (párrafo/bloque nuevo este
+            # trimestre): se clona el último párrafo en inglés visto para mantener el formato.
+            for k in range(j1 + n_both, j2):
+                if last_en_para is not None:
+                    new_seg = _clone_paragraph_after(last_en_para, 1)
+                    last_en_para = new_seg[-1]
+                elif first_en_para is not None:
+                    # Todavía no se vio ningún párrafo en inglés (el segmento nuevo está antes de
+                    # cualquier coincidencia, ej. el documento empieza con contenido nuevo) — se clona
+                    # el primer párrafo del documento en inglés y se inserta antes de él.
+                    new_seg = _clone_paragraph_before(first_en_para, 1)
+                else:
+                    new_seg = []
+                pairs.append((segs_es[k], new_seg))
+                n_inserted += 1
+
+    if n_inserted or n_deleted:
+        log.append(
+            f"[AVISO] (EN) La estructura de párrafos del Word en español definitivo y la del Word en "
+            f"inglés base no calzaban del todo (ej. un título partido distinto, un párrafo fusionado o "
+            f"nuevo): se ajustó automáticamente — se insertaron {n_inserted} párrafo(s) nuevo(s) "
+            f"clonando el formato del párrafo en inglés más cercano, y se eliminaron {n_deleted} "
+            "párrafo(s) en inglés sin contraparte en español este trimestre (contenido obsoleto de "
+            "otro trimestre) — en vez de dejar todo desalineado como antes."
+        )
+    return pairs, n_equal
+
+def _align_segments_readonly(segs_a, segs_b):
+    """Como _align_segments, pero de SOLO LECTURA (no clona ni borra ningún párrafo): devuelve pares
+    (segmento_a, segmento_b) para los tramos que calzaron en estructura, ignorando los que no tienen
+    contraparte (sin insertar ni borrar nada — no corresponde tocar ningún documento acá). Se usa para
+    construir old_lookup/template_lookup a partir del Word en español del trimestre ANTERIOR y el Word
+    en inglés base, que son solo diccionarios de consulta de texto, nunca documentos a modificar."""
+    sig_a = [_segment_signature(s) for s in segs_a]
+    sig_b = [_segment_signature(s) for s in segs_b]
+    sm = difflib.SequenceMatcher(None, sig_a, sig_b, autojunk=False)
+    pairs = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == 'equal':
+            for k in range(i2 - i1):
+                pairs.append((segs_a[i1 + k], segs_b[j1 + k]))
+        else:
+            n_both = min(i2 - i1, j2 - j1)
+            for k in range(n_both):
+                pairs.append((segs_a[i1 + k], segs_b[j1 + k]))
+    return pairs
+
 DEEPL_PROPOSAL_PREFIX_EN = "DeepL translation — please verify: "
 NO_DEEPL_PREFIX_EN = "SPANISH — DeepL not configured, translate manually: "
 # NO_DEEPL_FAILED_PREFIX_EN: mismo caso de "se quedó en español, pendiente de traducir a mano", pero
@@ -1005,16 +1149,10 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
     segs_en = _segment_narrative(doc_en, header_anchors_en)
 
     n_es, n_en = len(segs_es), len(segs_en)
-    n_common = min(n_es, n_en)
-    if n_es != n_en:
-        log.append(
-            f"[AVISO] (EN) La cantidad de segmentos de texto narrativo no calzó entre el Word en "
-            f"español definitivo ({n_es}) y el Word en inglés base ({n_en}): se alinearon los "
-            f"primeros {n_common} segmentos en el mismo orden en que aparecen en cada documento. "
-            "Revisa a mano el resto del documento en inglés (puede deberse a un párrafo/viñeta nueva, "
-            "borrada o fusionada en alguno de los dos idiomas este trimestre)."
-        )
-    if n_en and n_common / n_en < 0.5:
+    # _align_segments reemplaza el zip posicional directo de antes (ver su docstring: un solo párrafo
+    # de más/menos en cualquier parte ya no desalinea el resto del documento).
+    aligned_pairs, n_equal = _align_segments(segs_es, segs_en, log)
+    if n_es and n_equal / n_es < 0.5:
         log.append(
             "[ALERTA] (EN) Menos de la mitad de la estructura del Word en inglés base calzó con la "
             "del Word en español definitivo. Esto casi siempre significa que el 'Word base en inglés "
@@ -1053,8 +1191,6 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
             "tradujeron de una forma salgan con una redacción levemente distinta esta vez."
         )
 
-    flat_es_prev = _flatten(segs_es_prev)
-    flat_en_prev_state = _flatten(segs_en)  # todavía sin tocar: es el inglés del trimestre anterior
     old_lookup = {}
     # template_lookup: igual que old_lookup, pero con las cifras de cada oración enmascaradas (ver
     # _mask_numbers_es) — permite reconocer "misma redacción, cifras distintas" (el caso normal de
@@ -1062,25 +1198,30 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
     # vez de tratarlo como texto nuevo (ver docstring de _NUM_PLACEHOLDER más arriba).
     template_lookup = {}
     _can_sweep_periods_es = periods_es_prev is not None and periods_es_curr is not None
-    for j in range(min(len(flat_es_prev), len(flat_en_prev_state))):
-        es_prev_text = flat_es_prev[j].text
-        en_prev_text = flat_en_prev_state[j].text
-        key = _normalize_for_diff(es_prev_text)
-        if key:
-            old_lookup[key] = en_prev_text
-            # Para el template (ver docstring de la función): primero se reescriben, dentro de la
-            # oración ANTERIOR, sus propias menciones de período (Dic25, T24/25, etc.) por las de ESTE
-            # trimestre — igual mecanismo que sweep_text/apply_global_sweep, ya probado en el resto del
-            # pipeline — y RECIÉN AHÍ se enmascaran las cifras. Así, una oración que solo cambió en
-            # período y cifras calza con la de este trimestre aunque mencione el período explícitamente
-            # (el caso más común: "el EBITDA a Dic25 alcanzó..." / "el EBITDA a Jun26 alcanzó...").
-            swept_prev_text = (
-                ASM_ES.P.sweep_text(es_prev_text, periods_es_prev, periods_es_curr)
-                if _can_sweep_periods_es else es_prev_text
-            )
-            template_key = _mask_numbers_es(_normalize_for_diff(swept_prev_text))
-            if template_key != key:  # solo vale la pena si de verdad había alguna cifra/período
-                template_lookup[template_key] = (es_prev_text, en_prev_text)
+    # Alineado por ESTRUCTURA (ver _align_segments_readonly), no por posición directa: un segmento de
+    # más o de menos entre el español del trimestre anterior y el inglés base (título partido distinto,
+    # etc. — ver docstring de _align_segments) ya no desalinea el resto de este diccionario.
+    for es_prev_seg, en_prev_seg in _align_segments_readonly(segs_es_prev, segs_en):
+        for p_es_prev, p_en_prev in zip(es_prev_seg, en_prev_seg):
+            es_prev_text = p_es_prev.text
+            en_prev_text = p_en_prev.text
+            key = _normalize_for_diff(es_prev_text)
+            if key:
+                old_lookup[key] = en_prev_text
+                # Para el template (ver docstring de la función): primero se reescriben, dentro de la
+                # oración ANTERIOR, sus propias menciones de período (Dic25, T24/25, etc.) por las de
+                # ESTE trimestre — igual mecanismo que sweep_text/apply_global_sweep, ya probado en el
+                # resto del pipeline — y RECIÉN AHÍ se enmascaran las cifras. Así, una oración que solo
+                # cambió en período y cifras calza con la de este trimestre aunque mencione el período
+                # explícitamente (el caso más común: "el EBITDA a Dic25 alcanzó..." / "el EBITDA a
+                # Jun26 alcanzó...").
+                swept_prev_text = (
+                    ASM_ES.P.sweep_text(es_prev_text, periods_es_prev, periods_es_curr)
+                    if _can_sweep_periods_es else es_prev_text
+                )
+                template_key = _mask_numbers_es(_normalize_for_diff(swept_prev_text))
+                if template_key != key:  # solo vale la pena si de verdad había alguna cifra/período
+                    template_lookup[template_key] = (es_prev_text, en_prev_text)
 
     deepl_on = DT.is_configured()
     n_reused = 0
@@ -1091,9 +1232,13 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
     n_segs_mismatch = 0
     deepl_error_reasons = []
 
-    for i in range(n_common):
-        es_items = segs_es[i]
-        en_items = segs_en[i]
+    n_segs_sin_destino = 0
+    for es_items, en_items in aligned_pairs:
+        if not en_items:
+            # No había ningún párrafo en inglés disponible para clonar (caso extremo: el segmento
+            # nuevo es el primero de todo el documento) — no hay dónde escribir, se deja constancia.
+            n_segs_sin_destino += 1
+            continue
         if len(es_items) != len(en_items):
             n_segs_mismatch += 1
 
@@ -1151,7 +1296,7 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
     if total:
         msg = (
             f"[OK] (EN) Texto narrativo (todo el documento, salvo encabezados/fechas, Flujo de "
-            f"Efectivo y tablas) comparado contra el Word en español definitivo en {n_common} "
+            f"Efectivo y tablas) comparado contra el Word en español definitivo en {len(aligned_pairs)} "
             f"segmento(s), {total} oración(es)/viñeta(s) en total: {n_reused} sin cambios (misma "
             f"redacción y cifras que el trimestre anterior), {n_numbers_updated} con la misma "
             "redacción ya aprobada pero cifras actualizadas (no necesitan revisión — las cifras "
@@ -1180,9 +1325,16 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
         log.append("[AVISO] (EN) No encontré ningún segmento de texto narrativo para comparar/traducir.")
     if n_segs_mismatch:
         log.append(
-            f"[AVISO] (EN) {n_segs_mismatch} de los {n_common} segmentos alineados tenían distinta "
-            "cantidad de párrafos/viñetas entre español e inglés (se agregaron o quitaron viñetas en "
-            "inglés para que calce la cantidad) — revisa esos segmentos con más atención."
+            f"[AVISO] (EN) {n_segs_mismatch} de los {len(aligned_pairs)} segmentos alineados tenían "
+            "distinta cantidad de párrafos/viñetas entre español e inglés (se agregaron o quitaron "
+            "viñetas en inglés para que calce la cantidad) — revisa esos segmentos con más atención."
+        )
+    if n_segs_sin_destino:
+        log.append(
+            f"[ALERTA] (EN) {n_segs_sin_destino} segmento(s) de texto narrativo nuevo no tenían ningún "
+            "párrafo en inglés cercano del cual copiar el formato (pasa solo si el documento no tiene "
+            "casi ningún párrafo en común con el inglés base) y quedaron sin generar — revisa el "
+            "'Word base en inglés del trimestre anterior' que subiste."
         )
 
 
