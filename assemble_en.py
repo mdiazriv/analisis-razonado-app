@@ -14,7 +14,7 @@ Generar un trimestre distinto al del Word base en inglés regenerará todo el te
 las tablas (imágenes) quedarán con los valores del Word base. Falta: tablas en inglés con header/
 formato numérico en-US (ver render_tables_v5.py) y el traductor Excel ES->EN.
 """
-import re, copy, io, os, sys, zipfile, tempfile, shutil
+import re, copy, io, os, sys, zipfile, tempfile, shutil, difflib
 import docx
 from docx.enum.text import WD_COLOR_INDEX
 import openpyxl
@@ -888,14 +888,15 @@ def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_
     subirlo de nuevo acá) — se usa como punto de comparación.
 
     A pedido explícito de Melissa, esto NO traduce línea por línea sin más: compara, párrafo por
-    párrafo, el texto libre de ESTE trimestre contra el de ese mismo párrafo en el Word en español
-    del trimestre ANTERIOR, y **solo** manda a traducir los párrafos que de verdad cambiaron. Un
-    párrafo libre sin cambios de redacción respecto al trimestre pasado se deja tal cual está en el
-    Word en inglés (su traducción ya fue aprobada y usada en informes anteriores; no hay razón para
-    reemplazarla por una traducción nueva de DeepL, que podría usar una redacción distinta aunque
-    diga lo mismo). Si no se puede comparar (no se subió el Word en español anterior, no abre, o la
-    cantidad de párrafos de ese tramo no calza entre los dos trimestres), se trata ese párrafo como
-    'cambiado' y se traduce de todos modos — mejor eso que dejar pasar un cambio real sin avisar."""
+    párrafo, el texto libre de ESTE trimestre contra el del Word en español del trimestre ANTERIOR
+    (alineando por CONTENIDO dentro de cada tramo, no por posición fija — ver _align comentario más
+    abajo), y **solo** manda a traducir los párrafos que de verdad cambiaron. Un párrafo libre sin
+    cambios de redacción respecto al trimestre pasado se deja tal cual está en el Word en inglés (su
+    traducción ya fue aprobada y usada en informes anteriores; no hay razón para reemplazarla por
+    una traducción nueva de DeepL, que podría usar una redacción distinta aunque diga lo mismo). Si
+    no se puede comparar en absoluto (no se subió el Word en español anterior, o no abre, o el tramo
+    es nuevo y no existía el trimestre pasado), se trata todo el tramo como 'cambiado' y se traduce
+    de todos modos — mejor eso que dejar pasar un cambio real sin avisar."""
     try:
         doc_es = docx.Document(word_es_edited_path)
     except Exception as ex:
@@ -920,9 +921,29 @@ def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_
         )
 
     # Punto de comparación: el mismo texto libre, pero del Word en español del trimestre ANTERIOR
-    # (runs_es_prev), alineado por posición ordinal exactamente igual que runs_es con runs_en. Si no
-    # se puede abrir o no se pasó la ruta, runs_es_prev queda vacío y todo se trata como 'cambiado'
-    # (se traduce igual que antes de este ajuste).
+    # (runs_es_prev), alineado tramo-por-tramo por posición ordinal igual que runs_es con runs_en (el
+    # tramo libre n-ésimo de este trimestre contra el tramo libre n-ésimo del anterior). Si no se
+    # puede abrir o no se pasó la ruta, runs_es_prev queda vacío y todo se trata como 'cambiado' (se
+    # traduce igual que si no hubiera punto de comparación).
+    #
+    # OJO: DENTRO de cada tramo, los párrafos de este trimestre YA NO se comparan por posición fija
+    # contra los del trimestre anterior (k-ésimo contra k-ésimo) — se alinean por CONTENIDO con
+    # difflib (igual que un diff de texto). Motivo (reportado por Melissa, oct-2026): el tramo de
+    # Riesgos/exposición cambiaria es, por lejos, el más largo del documento (9-10 párrafos cortos
+    # seguidos) y es justo donde casi siempre se agrega, reescribe o borra algún párrafo de un
+    # trimestre a otro — con la comparación por posición fija, EN CUANTO la cantidad de párrafos de
+    # ese tramo no calzaba exacto (por un solo párrafo nuevo en medio, aunque todos los demás
+    # quedaran idénticos), el código de respaldo trataba TODO el tramo como 'cambiado' y volvía a
+    # traducir y resaltar en amarillo la sección de Riesgos COMPLETA — esto es lo que Melissa vio
+    # como "la sección de riesgos siempre queda resaltada entera" aunque ella sintiera que casi nada
+    # había cambiado. Verificado con los Word reales de la Sociedad (jun-2026 vs dic-2025): el tramo
+    # de Riesgos tenía 9-10 párrafos en un trimestre contra 1 en el otro por este mismo efecto de
+    # desfase en cascada. Con difflib, un párrafo agregado/borrado/reescrito en medio del tramo solo
+    # marca ESE párrafo como cambiado; el resto, aunque se haya corrido de posición dentro del tramo,
+    # se sigue reconociendo como "sin cambios" si el texto es idéntico — igual que lo que Melissa
+    # pidió ("la app debe... identificar las variaciones", no volver a marcar todo por un cambio
+    # puntual). Este reordenamiento NO afecta la alineación runs_es<->runs_en de más arriba (esa sigue
+    # siendo por posición ordinal, ya verificada a mano que calza 1 a 1 entre español e inglés).
     runs_es_prev = []
     if word_es_base_path:
         try:
@@ -942,6 +963,36 @@ def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_
             "como 'cambiado' y se traducirá por completo, en vez de traducir solo lo que varió."
         )
 
+    # Alineación por CONTENIDO (ver comentario "OJO" más arriba), no por tramo+posición: en vez de
+    # comparar el tramo n-ésimo de este trimestre contra el tramo n-ésimo del anterior (y dentro de
+    # cada uno, párrafo k-ésimo contra k-ésimo), se compara TODO el texto libre de este trimestre
+    # (todos los tramos, en orden, uno detrás de otro) contra TODO el texto libre del trimestre
+    # anterior, con un solo difflib sobre esa secuencia completa. Esto hacía falta porque, además de
+    # que la CANTIDAD de párrafos dentro de un mismo tramo puede no calzar entre trimestres (un
+    # párrafo agregado/borrado), la cantidad de TRAMOS en sí tampoco calza siempre 1 a 1 entre
+    # trimestres (ej. si un párrafo nuevo queda pegado a una plantilla reconocida en un trimestre
+    # pero no en otro, se corre el conteo de tramos de ahí en adelante) — verificado con los Word
+    # reales de la Sociedad (jun-2026 vs dic-2025): el bloque de Riesgos tenía 46 tramos libres en un
+    # trimestre contra 48 en el otro, y la comparación tramo-por-tramo quedaba completamente
+    # desalineada a partir de ahí (comparaba contenido de Riesgos de crédito contra un párrafo de
+    # Flujo de Caja, por ejemplo), lo que hacía que CASI TODO el bloque de Riesgos quedara marcado
+    # 'cambiado' por error. Comparando el texto libre completo de corrido, difflib encuentra los
+    # bloques realmente idénticos sin importar en qué tramo haya quedado cada uno este trimestre.
+    _flat_es = []  # [(run_idx, k), ...] en orden de documento, uno por párrafo libre de este trimestre
+    for _ridx, _es_paras in enumerate(runs_es):
+        for _k in range(len(_es_paras)):
+            _flat_es.append((_ridx, _k))
+    _flat_es_norm = [_normalize_for_diff(runs_es[_ridx][_k].text) for (_ridx, _k) in _flat_es]
+    _flat_prev_norm = [_normalize_for_diff(p.text) for _prev_paras in runs_es_prev for p in _prev_paras]
+
+    _unchanged_lookup = {}
+    if _flat_prev_norm:
+        _matcher = difflib.SequenceMatcher(a=_flat_prev_norm, b=_flat_es_norm, autojunk=False)
+        for tag, i1, i2, j1, j2 in _matcher.get_opcodes():
+            if tag == 'equal':
+                for off in range(i2 - i1):
+                    _unchanged_lookup[_flat_es[j1 + off]] = True
+
     deepl_on = DT.is_configured()
     n_translated = 0
     n_fallback = 0
@@ -960,15 +1011,12 @@ def translate_free_text_from_definitive_es(doc_en, word_es_edited_path, word_es_
         prev_paras = runs_es_prev[run_idx] if run_idx < len(runs_es_prev) else None
         if prev_paras is None:
             n_runs_no_prev += 1
-        prev_has_same_count = prev_paras is not None and len(prev_paras) == len(es_paras)
 
         new_texts = []
         for k, p_es in enumerate(es_paras):
             es_text = p_es.text.strip()
-            prev_text = prev_paras[k].text.strip() if prev_has_same_count else None
-            unchanged = prev_text is not None and _normalize_for_diff(es_text) == _normalize_for_diff(prev_text)
 
-            if unchanged:
+            if _unchanged_lookup.get((run_idx, k), False):
                 new_texts.append(None)  # None = no tocar este párrafo en inglés
                 n_unchanged += 1
                 continue
