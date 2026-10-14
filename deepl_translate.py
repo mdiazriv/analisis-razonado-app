@@ -78,24 +78,37 @@ def translate_es_en(text, source_lang='ES', target_lang='EN-US'):
     # API key lo indica (las de cuenta gratuita siempre terminan en ":fx").
     base = 'https://api-free.deepl.com' if _API_KEY.endswith(':fx') else 'https://api.deepl.com'
     try:
+        # IMPORTANTE (encontrado en vivo con la cuenta real de Melissa, oct-2026): mandar la key como
+        # parámetro 'auth_key' en el cuerpo del POST (la forma "clásica", documentada durante años)
+        # ahora devuelve 403 aunque la key sea válida y la cuenta esté activa — DeepL la rechaza con
+        # el mensaje "Missing Authorization header, expected 'Authorization: DeepL-Auth-Key <API
+        # key>'". Hay que mandar la key en ese header en vez del body. Se probó end-to-end con la key
+        # real de Melissa: con 'auth_key' en el body, 403; con el header de abajo, 200 y traducción
+        # correcta. Se deja 'auth_key' fuera del body (no hace falta, y así no queda ambiguo).
         resp = requests.post(
             f'{base}/v2/translate',
+            headers={'Authorization': f'DeepL-Auth-Key {_API_KEY}'},
             data={
-                'auth_key': _API_KEY,
                 'text': text,
                 'source_lang': source_lang,
                 'target_lang': target_lang,
             },
             timeout=15,
         )
-        if resp.status_code == 403:
-            _LAST_ERROR = 'API key inválida o no autorizada (error 403 de DeepL)'
-            return None
-        if resp.status_code == 456:
-            _LAST_ERROR = 'Se agotó la cuota de caracteres de la cuenta DeepL (error 456)'
-            return None
-        if resp.status_code == 429:
-            _LAST_ERROR = 'Demasiadas solicitudes a DeepL a la vez (error 429) — reintentar más tarde'
+        if resp.status_code in (403, 456, 429):
+            # Mensaje real que manda DeepL en el cuerpo de la respuesta (más preciso que adivinar
+            # por el código HTTP solo — un 403 puede ser key inválida, pero también, como pasó acá,
+            # un problema de formato de la solicitud que no tiene nada que ver con la key en sí).
+            try:
+                server_msg = resp.json().get('message', '')
+            except Exception:
+                server_msg = resp.text[:200] if resp.text else ''
+            if resp.status_code == 403:
+                _LAST_ERROR = f'API key inválida o no autorizada (error 403 de DeepL). Detalle: {server_msg}'
+            elif resp.status_code == 456:
+                _LAST_ERROR = f'Se agotó la cuota de caracteres de la cuenta DeepL (error 456). Detalle: {server_msg}'
+            else:
+                _LAST_ERROR = f'Demasiadas solicitudes a DeepL a la vez (error 429) — reintentar más tarde. Detalle: {server_msg}'
             return None
         resp.raise_for_status()
         translated = resp.json()['translations'][0]['text']
