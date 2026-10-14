@@ -485,13 +485,28 @@ TABLES = {
  # de fechas con el banner genérico, perdiendo el rango real — bug reportado por Melissa: "no quedaron
  # bien los títulos de fechas"): las 2 filas de encabezado real de la plantilla ya aportan toda la
  # info de período necesaria.
+ # Ingresos / IngresosxSegmento / Costos / OtrosComp: las 4 tablas "cascada" (6 columnas
+ # numéricas: MUS$/MUS$/%/MUS$/MUS$/%). Hallazgo nuevo (oct-2026, no reportado por Melissa, visto
+ # al renderizar con el Excel real de Jun26): con los montos de ESTE trimestre (cifras de 7
+ # dígitos, ej. "(1.239.108)") el ancho de columna que traían estas 4 tablas desde antes se quedó
+ # chico — el texto se salía de su columna y se montaba sobre la siguiente, sobre todo en el
+ # encabezado "variación" (se fundía con "Jul25 - Jun26") y en las columnas MUS$ más anchas de la
+ # derecha. Se midió el ancho real de texto (fuente serif, negrita, tamaño ya escalado por
+ # page_factor) para el peor caso real (Costos: "(1.239.108)", 11 caracteres) y se bajó el tamaño
+ # de letra de estas 4 tablas (9.0->7.0) para que las 6 columnas numéricas quepan sin sobreponerse,
+ # dejando la columna 0 (texto) con el mismo ancho de antes (no hacía falta tocarla: el ajuste de
+ # líneas de la columna 0 ya andaba bien). Mismas 6 columnas numéricas en las 4 tablas, para que
+ # quede consistente entre ellas y con margen para montos aún mayores en trimestres futuros.
  'Ingresos': dict(
     sheet='Ingresos',
     cols=[(2,'str'),(3,'num'),(5,'num'),(7,'auto_pct'),(9,'num'),(11,'num'),(13,'auto_pct')],
     rows=[2,3,4,5,8],
     bold_rows={4}, total_rows={4}, header_rows={0,1}, center_cols={1,2,3,4,5,6},
-    col_widths=[0.30,0.115,0.115,0.085,0.115,0.115,0.085],
-    fig_w=9.5,
+    col_widths=[0.30,0.098,0.098,0.093,0.114,0.114,0.093],
+    fig_w=9.5, font_size=7.0,
+    # max_lines/dynamic_row_height: "Ingresos de actividades ordinarias" perdía "ordinarias" en
+    # silencio con el default (max_lines=2) — verificado contra el Excel real de Jun26.
+    max_lines=3, dynamic_row_height=True,
     anchor=(2, 'Ingresos', 1),
  ),
 
@@ -500,8 +515,8 @@ TABLES = {
     cols=[(2,'str'),(3,'num'),(5,'num'),(6,'auto_pct'),(8,'num'),(10,'num'),(11,'auto_pct')],
     rows=[6,7,9,16,19],
     bold_rows={4}, total_rows={4}, header_rows={0,1}, center_cols={1,2,3,4,5,6},
-    col_widths=[0.30,0.115,0.115,0.085,0.115,0.115,0.085],
-    fig_w=9.5,
+    col_widths=[0.30,0.098,0.098,0.093,0.114,0.114,0.093],
+    fig_w=9.5, font_size=7.0,
  ),
 
  'Costos': dict(
@@ -510,10 +525,16 @@ TABLES = {
     rows=[3,4,6,8,9,10,12,13,14],
     bold_rows={2,5,6,7,8}, italic_rows={3,4,7},
     total_rows={8}, header_rows={0,1}, center_cols={1,2,3,4,5,6},
-    col_widths=[0.38,0.107,0.107,0.082,0.107,0.107,0.082],
-    fig_w=9.5, row_h=0.30,
-    # Shorten the very long row 3 label (0-based index of row 9 in rows list = index 5)
-    label_shorten={4: 'Otros gastos por función,\nexcl. deterioros'},
+    col_widths=[0.38,0.098,0.098,0.093,0.114,0.114,0.093],
+    fig_w=9.5, font_size=7.0, row_h=0.30,
+    # Shorten the very long row 3 label (0-based index of row 9 in rows list = index 5).
+    # NOTA: este texto pasa igual por wrap_label() (que separa en líneas por ancho de columna,
+    # ignorando cualquier '\n' que se le ponga a mano), así que el '\n' manual que tenía antes
+    # ("Otros gastos por función,\nexcl. deterioros") no se respetaba: wrap_label lo re-partía en
+    # 3 líneas reales a este ancho de columna y, como max_lines=2 (el default), la 3ra línea
+    # ("deterioros") se perdía en silencio — el texto quedaba cortado en "...función, excl." sin
+    # decir qué se excluía. Se acortó un poco más (sin "por") para que entre completo en 2 líneas.
+    label_shorten={4: 'Otros gastos función, excl. deterioros'},
  ),
 
  'OtrosComp': dict(
@@ -521,8 +542,12 @@ TABLES = {
     cols=[(3,'str'),(4,'num'),(6,'num'),(8,'auto_pct'),(10,'num'),(12,'num'),(14,'auto_pct')],
     rows=[4,5,7,8,9,10,11,13],
     bold_rows={7}, total_rows={7}, header_rows={0,1}, center_cols={1,2,3,4,5,6},
-    col_widths=[0.38,0.107,0.107,0.082,0.107,0.107,0.082],
-    fig_w=9.5,
+    col_widths=[0.38,0.098,0.098,0.093,0.114,0.114,0.093],
+    fig_w=9.5, font_size=7.0,
+    # max_lines/dynamic_row_height: "Participación en las ganancias (pérdidas) de asociadas"
+    # perdía "de asociadas" en silencio con el default (max_lines=2) — verificado contra el Excel
+    # real de Jun26.
+    max_lines=3, dynamic_row_height=True,
     anchor=(3, 'Otros Ingresos (egresos)', 1),
  ),
 
@@ -536,6 +561,7 @@ TABLES = {
     bold_rows={0,1,2,4,6}, italic_rows={3,5,7},
     total_rows=set(), header_rows={0}, center_cols={1,2,3},
     col_widths=[0.44,0.14,0.21,0.21],
+    max_lines=3, dynamic_row_height=True,
     row_fmt={2:'dec2',4:'dec2',6:'num'},
     italic_col0_only=True,
  ),
@@ -555,7 +581,22 @@ TABLES = {
     rows=[6,7,8,9,10,11,12,13,14,15,16,17,18],
     bold_rows={0,1,3,5,7,9,11}, italic_rows={2,4,6,8,10,12},
     total_rows=set(), header_rows={0}, center_cols={1,2,3,4},
-    col_widths=[0.40,0.14,0.155,0.155,0.15],
+    # col_widths / max_lines / dynamic_row_height: ninguno de los tres estaba calibrado para la
+    # fila nueva desde Jun26 "Valor Libro de la acción (US$)" / "Dolares por acción" — la columna
+    # Unidad (ci=1, antes 0.14) nunca había tenido un texto tan largo (todo lo demás es "veces" o
+    # vacío) y, al dibujarse ahora todo el texto alineado a la izquierda y sin recorte por columna,
+    # "Dolares por acción" se montaba sobre la columna de valores vecina (reportado por Melissa con
+    # captura de pantalla). Medido con matplotlib (ancho real renderizado): esa frase necesita
+    # ~1.75in a la fuente de esta tabla, muy por encima de los ~0.43in que daba 0.14 de ancho.
+    # Ensanchar esa columna a 0.24 (quitándole a la de cuentas, que tiene bastante margen) la deja
+    # con ~1.9in disponibles. De paso, esto hizo evidente que la columna de cuentas (ci=0, que
+    # siempre envuelve texto) ya recortaba en silencio la descripción en cursiva más larga
+    # ("Activos corrientes (-) Otros activos no financieros..." 114 caracteres) al quedar limitada
+    # al max_lines por defecto (2) sin dynamic_row_height — se sube max_lines a 7 (la más larga
+    # entra justo en 7 líneas a este ancho) y se activa dynamic_row_height para que esa fila crezca
+    # en vez de montarse sobre la fila siguiente.
+    col_widths=[0.33,0.24,0.14,0.14,0.15],
+    max_lines=7, dynamic_row_height=True,
     row_fmt={1:'dec2',3:'dec2',5:'dec2',7:'auto_pct',9:'auto_pct',11:'dec4'},
     italic_col0_only=True,
  ),
@@ -570,7 +611,14 @@ TABLES = {
     rows=[1,2,3,4,5,6,7],
     bold_rows={0,1,3,5}, italic_rows={2,4,6},
     total_rows=set(), header_rows={0}, center_cols={1,2,3,4},
-    col_widths=[0.50,0.06,0.15,0.15,0.14],
+    # Misma causa que en 'Indicadores1' arriba: la columna Unidad (ci=1, antes 0.06 — demasiado
+    # angosta incluso para "veces" o el propio encabezado "Unidad") se montaba sobre la columna de
+    # valores vecina (captura de pantalla de Melissa). Ensanchada a 0.11 (le sobra margen a la
+    # columna de cuentas, que baja de 0.50 a 0.45) y, de paso, max_lines sube de 2 (el valor por
+    # defecto, insuficiente) a 4 para que la descripción en cursiva más larga no se recorte en
+    # silencio, con dynamic_row_height para que esa fila más alta no se monte sobre la siguiente.
+    col_widths=[0.45,0.11,0.15,0.15,0.14],
+    max_lines=4, dynamic_row_height=True,
     row_fmt={1:'dec2',3:'auto_pct',5:'auto_pct'},
     italic_col0_only=True,
  ),
@@ -581,6 +629,10 @@ TABLES = {
     rows=[4,5,7,8,9,11,12,13,15,16,17],
     bold_rows={0,1,4,7,8,10}, total_rows={4,7,10}, header_rows={0,1}, center_cols={1,2,3,4},
     col_widths=[0.52,0.12,0.12,0.12,0.12],
+    # max_lines/dynamic_row_height: "Patrimonio atribuible a los propietarios de la controladora"
+    # perdía "controladora" en silencio con el default (max_lines=2) — verificado contra el Excel
+    # real de Jun26 (hallazgo nuevo, no reportado por Melissa).
+    max_lines=3, dynamic_row_height=True,
  ),
 
  # VctosPtmos: use cols 3-9 (Detalle + 6 data cols), skip "Total" col
@@ -592,6 +644,12 @@ TABLES = {
     col_widths=[0.26,0.10,0.10,0.115,0.115,0.115,0.115],
     group_headers=[(0,2,5,'Flujos')],
     fig_w=9.0,
+    # max_lines/dynamic_row_height: con el default (max_lines=2) estas 3 etiquetas acortadas, MÁS
+    # "Ctas. comerciales otras ctas. por pagar" sin acortar, perdían palabras en silencio (p.ej.
+    # "público" y "empresas relacionadas" desaparecían del todo) — mismo bug de wrap_label() ya
+    # encontrado en Indicadores1/Rentabilidad/IndicadoresActividad/Costos. Verificado contra el
+    # Excel real de Jun26: a max_lines=4 las 7 etiquetas de esta columna reconstruyen completas.
+    max_lines=4, dynamic_row_height=True,
     label_shorten={
         4: 'Bonos - Obligaciones\npúblico',
         7: 'Ctas. comerciales\notras ctas. por pagar',
@@ -635,16 +693,20 @@ TABLES = {
     # punto de miles, filas de total), necesitaba 0.94in a font_size=8.0, más de lo que cabía en
     # cualquier reparto de columnas que a la vez dejara espacio para la columna 0 (nombre de
     # cuenta, hasta 59 caracteres: "Deudores comerciales y otras cuentas por cobrar, corrientes").
-    # Bajar font_size de 8.0 a 7.0 reduce ese ancho a 0.82in (el ancho de columna de moneda, el
-    # alto de fila y el "wrap" de la columna 0 dependen de page_factor, no de font_size, así que
-    # esto SOLO achica el texto, no descuadra el resto). Con columnas de moneda a 0.10 (0.10*9.5=
-    # 0.95in, menos ~0.07in de margen izquierdo = ~0.88in disponibles) el número más ancho entra con
-    # margen, y la columna 0 queda en 0.20 (antes 0.30/0.24), suficiente para el nombre de cuenta
-    # más largo envuelto en hasta 6 líneas (max_lines sube de 3 a 6 — ver nota en wrap_label: antes
-    # recortaba en silencio cualquier línea de más, perdiendo texto real sin aviso). Todo esto
-    # verificado renderizando y midiendo cada valor real de ExposicTC (ES y EN), no solo el peor caso.
-    col_widths=[0.20,0.10,0.10,0.10,0.10,0.10,0.10,0.10,0.10],
-    fig_w=9.5, font_size=7.0, row_h=0.42, max_lines=6,
+    #
+    # Un primer intento bajó font_size a 7.0 y ensanchó la columna 0 a 0.20 con max_lines=6-7 para
+    # que la cuenta más larga entrara sin recortarse sin montarse sobre la columna vecina — eso
+    # arregló el traslape, pero en 24 filas, varias con etiquetas de 5-6 líneas, el alto total de
+    # la tabla subía a ~14in en la página (más de una página y media de ~9in de alto útil), así que
+    # Word la partía a mitad de fila en el salto de página — se veía "cortada" (reportado por
+    # Melissa). Bajar más el tamaño de letra (a font_size=5.0, calibrado igual que arriba: el
+    # número en negrita más ancho queda en ~0.59in, muy por debajo de lo que entra en cada columna
+    # de moneda a este ancho) permite ensanchar la columna 0 a 0.3528 — con eso la cuenta más larga
+    # entra en 4 líneas en vez de 6-7, y la tabla completa baja a ~7.8in de alto en la página,
+    # dentro de una sola página de ~9in. Todo esto verificado renderizando y midiendo cada valor
+    # real de ExposicTC (ES y EN) a este tamaño, no solo el peor caso.
+    col_widths=[0.3528,0.0809,0.0809,0.0809,0.0809,0.0809,0.0809,0.0809,0.0809],
+    fig_w=9.5, font_size=5.0, row_h=0.42, max_lines=4,
     dynamic_row_height=True,
     label_overrides_es={(0, 1): 'CLP', (0, 2): 'PEN', (0, 3): 'EUR', (0, 4): 'MXN',
                          (0, 5): 'CNY', (0, 6): 'MAD', (0, 7): 'INR', (0, 8): 'Otras'},
@@ -732,7 +794,21 @@ TABLES = {
     cols=[(3,'str'),(4,'str'),(5,'str'),(6,'num'),(7,'num')],
     rows=list(range(3,43)),
     bold_rows={0,1}, total_rows=set(), header_rows={0,1}, center_cols={2,3,4},
-    col_widths=[0.12,0.32,0.11,0.225,0.225],
+    # Con 40 filas de datos, esta tabla siempre va a ocupar más de una página de Word (ya pasaba
+    # antes de cualquier ajuste de ancho de columna: a letra normal ya daba ~16in de alto en la
+    # página, el doble de una página útil de ~9in) — reducir el tamaño de letra baja eso a ~11in,
+    # bastante más cerca de una sola página y con menos filas partidas justo en el salto de
+    # página. Column widths recalculados para el nuevo tamaño de letra (medido con matplotlib,
+    # texto real renderizado, no estimado): "Marruecos" (el país más largo) en PAÍS, "MONEDA" en
+    # el encabezado, y "350.000/embarque" (el valor sin espacios más ancho) en MONTO CUBIERTO,
+    # cada uno con margen para no montarse sobre la columna vecina (el texto se dibuja alineado a
+    # la izquierda, sin recorte por columna).
+    col_widths=[0.1039,0.4616,0.0963,0.1691,0.1691],
+    font_size=7.0,
+    # max_lines=2 (en vez de 3) por ahorrar alto de página se probó primero, pero "50.000 por
+    # evento" en MONTO CUBIERTO perdía "evento" en silencio a ese límite (verificado contra el
+    # Excel real de Jun26) — se volvió a 3 para no perder datos; con dynamic_row_height=True esto
+    # solo agranda las 1-2 filas que de verdad necesitan 3 líneas, no toda la tabla.
     wrap_all_cols=True, max_lines=3, dynamic_row_height=True,
  ),
 
@@ -742,6 +818,11 @@ TABLES = {
     rows=[4,5,6,7,11],
     bold_rows={0,1,2,4}, total_rows={4}, header_rows={0,1,2}, center_cols={1,2,3,4},
     col_widths=[0.28,0.18,0.18,0.18,0.18],
+    # max_lines/dynamic_row_height: el encabezado "Ajuste Valor razonable al" (y su traducción
+    # "Fair Value adjustment as of") perdía palabras en silencio con el default (max_lines=2) —
+    # mismo bug de wrap_label() ya visto en otras tablas. Solo afecta encabezados (header_rows):
+    # las columnas numéricas de datos no se envuelven (no tienen wrap_all_cols).
+    max_lines=4, dynamic_row_height=True,
  ),
 }
 
@@ -790,7 +871,11 @@ TABLES_EN = {'EBITDA': {'group_headers': [(0, 1, 2, 'CALENDAR YEAR\n(6 months)')
  # estas 4 hojas no tienen fila de banner propia; la fila de fechas real "Ene26-Jun26"/etc. ya se
  # traduce sola vía _translate_common_strings_en, no hace falta pisarla con un banner genérico).
  'Ingresos': {'label_overrides': {(1, 0): 'Total Operating Income',
-                                  (2, 0): 'Income from operating activities',
+                                  # Shortened vs. the EBITDA table's version of this same line
+                                  # ('Income from operating activities'): here col 0 is narrower
+                                  # (0.30 vs EBITDA's wider column) and the longer phrasing was
+                                  # silently losing "activities" to wrap_label()'s max_lines=2.
+                                  (2, 0): 'Income from operations',
                                   (3, 0): 'Other income, per function',
                                   (4, 0): 'Total Operating Income'}},
  'IngresosxSegmento': {'label_overrides': {(1, 0): 'Income per Segment',
@@ -800,7 +885,12 @@ TABLES_EN = {'EBITDA': {'group_headers': [(0, 1, 2, 'CALENDAR YEAR\n(6 months)')
  'Costos': {'label_overrides': {(0, 0): 'Costs and Expenses',
                                 (2, 0): 'Cost of sales',
                                 (3, 0): 'Administration expenses',
-                                (4, 0): 'Other expenses, per function,\nexcl. impairment',
+                                # Same wrap_label() truncation issue as the Spanish label_shorten
+                                # above: the manual '\n' is not respected (wrap_label re-splits by
+                                # column width), and the old text didn't fit in 2 lines at this
+                                # column's width — "impairment" was silently dropped. Shortened to
+                                # fit, matching the Spanish version's abbreviation of "función".
+                                (4, 0): 'Other func. expenses, excl. impairment',
                                 (5, 0): 'Other operating costs and expenses',
                                 (6, 0): 'Less:',
                                 (7, 0): 'Impairment of value of assets',
@@ -809,7 +899,10 @@ TABLES_EN = {'EBITDA': {'group_headers': [(0, 1, 2, 'CALENDAR YEAR\n(6 months)')
                                    (2, 0): 'Other profit (loss)',
                                    (3, 0): 'Financial income',
                                    (4, 0): 'Financial expenses',
-                                   (5, 0): 'Interest in profit (loss) of associated companies',
+                                   # Shortened to standard IFRS phrasing ("share of profit of
+                                   # associates") — the longer wording was silently losing
+                                   # "companies" to wrap_label()'s max_lines=2 at this column width.
+                                   (5, 0): 'Share of profit (loss) of associates',
                                    (6, 0): 'Exchange rate fluctuations',
                                    (7, 0): 'Other Income (expenses)'}},
  'IndicadoresActividad': {'label_overrides': {(0, 0): 'Indicator',
@@ -960,7 +1053,10 @@ TABLES_EN = {'EBITDA': {'group_headers': [(0, 1, 2, 'CALENDAR YEAR\n(6 months)')
                                  (16, 3): 'Market Value', (16, 4): 'Market Value',
                                  (17, 3): 'Market Value', (17, 4): 'Market Value',
                                  (19, 3): '50,000 per event', (19, 4): '50,000 per event',
-                                 (21, 3): '90% of unpaid amount', (21, 4): '90% of unpaid amount',
+                                 # Shortened to match the brevity of the Spanish original ("90%
+                                 # impago"): the longer phrasing was silently losing "amount" to
+                                 # wrap_label()'s max_lines=2 at this narrow column width.
+                                 (21, 3): '90% unpaid', (21, 4): '90% unpaid',
                                  (25, 3): 'Market Value', (25, 4): 'Market Value',
                                  (33, 3): 'Market Value', (33, 4): 'Market Value',
                                  (35, 3): 'Market Value', (35, 4): 'Market Value',
