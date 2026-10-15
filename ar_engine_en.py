@@ -850,3 +850,12 @@ def p_header_resultado_temporada(periods):
 
 def p_header_ingresos_acumulados(periods):
     return f"Accumulated income analysis as of {periods['CUR_MONTH_CAP']}"
+
+def p_header_sensibilidad_tc(periods):
+    # Título fijo (no depende del período ni del Excel, ver HEADER_TEMPLATES_EN en assemble_en.py):
+    # feedback Melissa (Oct26) — el Word base en inglés que subió traía este título genérico
+    # ("Sensitivity analysis") en vez de este, que es el que de verdad corresponde a esta sección
+    # (confirmado contra Earning_Report_June_2026_27_08_26.docx, el Word en inglés real de Jun26,
+    # donde aparece tal cual) y el que calza con el título en español ("Efectos en una Potencial
+    # Variación del Tipo de Cambio en las Cuentas Monetarias de Balances").
+    return "Effects of a Potential Exchange Rate Fluctuation on the Monetary Accounts of the Balance Sheet"

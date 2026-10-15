@@ -6,6 +6,7 @@ No usa merge_runs.py: cada párrafo cubierto se regenera completo (no es find/re
 import re, copy, io, os, sys, zipfile, tempfile, shutil
 import docx
 from docx.enum.text import WD_COLOR_INDEX
+from docx.oxml.ns import qn
 import openpyxl
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -498,11 +499,60 @@ def _next_list_block(doc, start, max_scan=14):
             break
     return items, j
 
+def _capture_numpr(para):
+    """Guarda (clona) el <w:numPr> de un párrafo de viñeta — el numId/ilvl que decide si se ve como
+    viñeta simple, "1)", "a)", etc. — ANTES de tocar nada, para poder normalizar el resto de la
+    lista a este mismo estilo al final (ver _replace_list_items). Devuelve None si el párrafo no
+    tiene numPr (no es una viñeta numerada)."""
+    pPr = para._p.pPr
+    if pPr is None:
+        return None
+    numpr = pPr.find(qn('w:numPr'))
+    return copy.deepcopy(numpr) if numpr is not None else None
+
+def _apply_numpr(para, numpr_template):
+    """Reemplaza el <w:numPr> de `para` por una copia de `numpr_template` (ver _capture_numpr),
+    insertándolo en la posición correcta dentro de <w:pPr> según el esquema de Word. No hace nada si
+    numpr_template es None (el párrafo de referencia tampoco tenía numPr).
+    Usa los accesores ya generados por python-docx (CT_PPr.get_or_add_pPr/_remove_numPr/_insert_numPr),
+    que se encargan solos del orden correcto según el esquema OOXML — un intento anterior de calcular
+    ese orden a mano vía CT_PPr._tag_seq falló: ese atributo no existe en tiempo de ejecución (solo se
+    ve en el código fuente; la maquinaria de descriptors lo consume al definir la clase y no lo deja
+    como atributo accesible después)."""
+    if numpr_template is None:
+        return
+    pPr = para._p.get_or_add_pPr()
+    pPr._remove_numPr()
+    pPr._insert_numPr(copy.deepcopy(numpr_template))
+
+def _normalize_bullet_numbering(paras):
+    """Normaliza el numId/ilvl de TODOS los párrafos de `paras` al del primero que tenga uno —
+    dentro de una misma lista de viñetas (ej. todos los "efectos" de un bridge), no debería haber
+    párrafos con numeración distinta entre sí, pero el documento base puede traer alguno así desde
+    hace quién sabe cuántos trimestres (reportado por Melissa, Oct26: un "efecto" puntual se veía
+    como "a)" en vez de viñeta simple, mientras sus hermanos en la misma lista sí eran viñeta —
+    inspeccionado el .docx real: ese párrafo tenía numId=2/ilvl=1 ("a) b) c)") en vez de numId=25/
+    ilvl=0 (viñeta) de sus vecinos). set_paragraph_text/_replace_list_items solo tocan el texto
+    (runs), nunca el numPr, así que sin esto el problema se sigue arrastrando trimestre tras
+    trimestre sin que nada lo corrija."""
+    ref = None
+    for p in paras:
+        ref = _capture_numpr(p)
+        if ref is not None:
+            break
+    if ref is None:
+        return
+    for p in paras:
+        _apply_numpr(p, ref)
+
 def _replace_list_items(bullet_paras, items_texts):
     """Actualiza una lista de párrafos de viñeta ya existente para que contenga exactamente
     items_texts, clonando o eliminando párrafos según haga falta. Devuelve la lista final completa de
     párrafos (incluyendo los que se hayan clonado), en orden, para que quien llama pueda seguir
-    insertando contenido justo a continuación sin perder la posición real en el documento."""
+    insertando contenido justo a continuación sin perder la posición real en el documento.
+    De paso, normaliza el numId/ilvl de todos los párrafos devueltos al del primero (ver
+    _normalize_bullet_numbering): una lista de viñetas no debería tener un párrafo con un estilo de
+    numeración distinto a sus vecinos."""
     n_existing = len(bullet_paras)
     n_target = len(items_texts)
     for k in range(min(n_existing, n_target)):
@@ -517,11 +567,15 @@ def _replace_list_items(bullet_paras, items_texts):
             set_paragraph_text(new_para, items_texts[k])
             final.append(new_para)
             last_el = new_el
+        _normalize_bullet_numbering(final)
         return final
     elif n_existing > n_target:
+        result = list(bullet_paras[:n_target])
         for p in bullet_paras[n_target:]:
             p._p.getparent().remove(p._p)
-        return list(bullet_paras[:n_target])
+        _normalize_bullet_numbering(result)
+        return result
+    _normalize_bullet_numbering(bullet_paras)
     return list(bullet_paras)
 
 def replace_bullet_block(doc, intro_anchor_regex, items_texts, max_existing_scan=14):

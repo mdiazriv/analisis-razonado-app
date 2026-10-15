@@ -27,28 +27,60 @@ import deepl_translate as DT  # traducción del texto narrativo (ver translate_n
 
 MARK_RE = re.compile(r'\[\[([^\]]+)\]\]|\{\{([^}]+)\}\}')
 
-def set_paragraph_text(paragraph, text):
-    # Conserva fuente/tamaño/subrayado del primer run original (ver assemble.py: algunos subtítulos de
-    # sección vienen subrayados en el Word base y deben seguir subrayados aunque se regenere el texto).
-    base_font_name = None; base_size = None; base_underline = None
+def set_paragraph_text(paragraph, text, force_bold=None, force_underline=None):
+    # force_bold/force_underline: para los pocos títulos/encabezados de HEADER_TEMPLATES_EN donde se
+    # conoce con certeza (verificado contra el Word en inglés real de Hortifrut de Jun26) si deben ir
+    # en negrita/subrayado o no — se usa en vez de heredar del run actual porque, en el Word base en
+    # inglés que Melissa ha ido subiendo trimestre a trimestre, varios de estos títulos YA perdieron su
+    # negrita en una vuelta anterior de este mismo pipeline (antes de este fix), así que heredar del
+    # run ya no basta para corregirlos esta vez (ver apply_header_templates).
+    #
+    # Conserva fuente/tamaño/subrayado/NEGRITA del primer run original. La negrita se agregó acá
+    # (feedback Melissa, Oct26, punto 6: "En inglés falta tener el mismo formato de subtitulos y
+    # titulos que el texto en español, como por ejemplo el resaltado en negrita o subrayado") — a
+    # diferencia de assemble.py (lado español), donde los subtítulos de sección fijos (ej.
+    # "Principales Componentes de los Costos de Ventas", en negrita en la plantilla base) casi nunca
+    # se regeneran (no están cubiertos por ningún ancla de SINGLE_TEMPLATES/HEADER_TEMPLATES, así que
+    # conservan intacto su run original), en inglés translate_narrative_from_definitive_es SÍ pasa por
+    # TODO el texto narrativo del documento (por pedido explícito de Melissa de traducir línea a línea
+    # TODO, ver docstring de esa función) — incluidos esos mismos subtítulos fijos, que en inglés
+    # también vienen en negrita en la plantilla base. Antes esta función siempre creaba el run nuevo
+    # SIN negrita (solo heredaba el subrayado), así que cada vez que translate_narrative_from_
+    # definitive_es tocaba uno de esos subtítulos, perdía la negrita que si tenía el lado español.
+    # Nota: se probó además un "último recurso" que leía <w:b/> de la marca de párrafo (w:pPr/w:rPr)
+    # cuando el run ya no traía negrita directa, pensado para auto-reparar subtítulos que ya la habían
+    # perdido en una vuelta anterior de este mismo pipeline (antes de este fix). Se descartó: en los
+    # .docx reales de Melissa esa marca de párrafo también queda, con la misma pinta (bold+underline
+    # juntos), en párrafos que NO deberían ser negrita — una viñeta del bridge ("Mayor gasto por
+    # depreciación...") y una oración narrativa normal ("Reducción en activos no corrientes...",
+    # insertada por el ajuste de estructura párrafo a párrafo, ver generate_en) — ambas confirmadas con
+    # negrita de sobra al probarlo. Mejor conservar solo lo que el run de texto YA trae correctamente
+    # (de aquí en adelante no se vuelve a perder) que arriesgarse a negritas de más en cualquier parte
+    # del documento.
+    base_font_name = None; base_size = None; base_underline = None; base_bold = None
     if paragraph.runs:
         r0 = paragraph.runs[0]
         base_font_name = r0.font.name; base_size = r0.font.size
         base_underline = r0.font.underline
+        base_bold = r0.bold
+    if force_bold is not None:
+        base_bold = force_bold
+    if force_underline is not None:
+        base_underline = force_underline
     for r in list(paragraph.runs):
         r._element.getparent().remove(r._element)
 
     pos = 0
     for m in MARK_RE.finditer(text):
         if m.start() > pos:
-            _add_run(paragraph, text[pos:m.start()], base_font_name, base_size, None, False, base_underline)
+            _add_run(paragraph, text[pos:m.start()], base_font_name, base_size, base_bold, False, base_underline)
         if m.group(1) is not None:
-            _add_run(paragraph, m.group(1), base_font_name, base_size, None, True, base_underline)
+            _add_run(paragraph, m.group(1), base_font_name, base_size, base_bold, True, base_underline)
         else:
             _add_run(paragraph, m.group(2), base_font_name, base_size, True, False, base_underline)
         pos = m.end()
     if pos < len(text):
-        _add_run(paragraph, text[pos:], base_font_name, base_size, None, False, base_underline)
+        _add_run(paragraph, text[pos:], base_font_name, base_size, base_bold, False, base_underline)
 
 def _add_run(paragraph, text, font_name, size, bold, highlight, underline=None):
     run = paragraph.add_run(text)
@@ -169,27 +201,115 @@ SINGLE_TEMPLATES_EN = [
 ]
 
 # Preámbulo y títulos de sección: no dependen del Excel (solo del período), toman `periods` directamente.
+# Cada entrada trae además (negrita, subrayado) verificados contra el Word en inglés real de Hortifrut
+# de Jun26 (Earning_Report_June_2026_27_08_26.docx) — se fuerzan explícitamente (ver
+# set_paragraph_text/force_bold) en vez de heredarlos del run actual porque, en el Word base en inglés
+# que Melissa ha ido subiendo trimestre a trimestre, varios de estos títulos YA perdieron su negrita en
+# una vuelta anterior de este mismo pipeline (feedback Melissa, Oct26, punto 6) — heredar del run ya
+# no basta para corregirlos esta vez, solo para no perderlos de nuevo en adelante.
 HEADER_TEMPLATES_EN = [
-    (r"^As of \w+ \d+, \d+\s*$", E.p_titulo_fecha),
-    (r"^The current reasoned analysis has been prepared for the period ending", E.p_preambulo_1),
-    (r"^Since the Company administers its operations with an agricultural season", E.p_preambulo_2),
-    (r"^Accumulated EBITDA analysis as of \w+", E.p_header_ebitda_acumulado),
-    (r"^Income Statement analysis as of \w+", E.p_header_resultado_calendario),
-    (r"^Income Statement Analysis .* season\s*$", E.p_header_resultado_temporada),
-    (r"^Accumulated income analysis as of \w+", E.p_header_ingresos_acumulados),
+    (r"^As of \w+ \d+, \d+\s*$", E.p_titulo_fecha, True, True),
+    (r"^The current reasoned analysis has been prepared for the period ending", E.p_preambulo_1, False, None),
+    (r"^Since the Company administers its operations with an agricultural season", E.p_preambulo_2, False, None),
+    (r"^Accumulated EBITDA analysis as of \w+", E.p_header_ebitda_acumulado, False, True),
+    (r"^Income Statement analysis as of \w+", E.p_header_resultado_calendario, False, True),
+    (r"^Income Statement Analysis .* season\s*$", E.p_header_resultado_temporada, False, True),
+    (r"^Accumulated income analysis as of \w+", E.p_header_ingresos_acumulados, False, True),
+    # Feedback Melissa (Oct26): el Word base en inglés traía este título como "Sensitivity analysis"
+    # (genérico, de una plantilla antigua) en vez del que de verdad corresponde a esta sección y que
+    # calza con el español ("Efectos en una Potencial Variación del Tipo de Cambio en las Cuentas
+    # Monetarias de Balances") — ver p_header_sensibilidad_tc. El regex acepta también el título ya
+    # correcto (como en el Word de referencia Jun26) para que no haga nada si ya viene bien.
+    (r"^(Sensitivity [Aa]nalysis|Effects of a Potential Exchange Rate Fluctuation on the Monetary "
+     r"Accounts of the Balance Sheet)\s*$", E.p_header_sensibilidad_tc, True, False),
 ]
 
 def apply_header_templates(doc, periods, log):
-    for anchor, fn in HEADER_TEMPLATES_EN:
+    for anchor, fn, force_bold, force_underline in HEADER_TEMPLATES_EN:
         idx, para = find_paragraph(doc, anchor)
         if para is None:
             log.append(f"[AVISO] (EN) No encontré párrafo para patrón: {anchor[:60]}")
             continue
         try:
-            set_paragraph_text(para, fn(periods))
+            set_paragraph_text(para, fn(periods), force_bold=force_bold, force_underline=force_underline)
             log.append(f"[OK] (EN) Actualizado (encabezado/preámbulo): {anchor[:50]}")
         except Exception as ex:
             log.append(f"[ERROR] (EN) {anchor[:50]}: {ex}")
+
+# STATIC_SUBTITLES_EN: subtítulos/títulos de sección que NO dependen del período (texto idéntico todos
+# los trimestres, a diferencia de HEADER_TEMPLATES_EN de arriba) — por eso no necesitan una función
+# fn(periods) que genere el texto, solo re-forzar negrita/subrayado sobre el texto que YA está ahí (ver
+# apply_static_subtitle_formatting_en). Lista armada comparando contra el Word en inglés oficial de
+# referencia, nunca tocado por este pipeline (Marzo 2026, 648d7711): cada tupla trae (patrón,
+# force_bold, force_underline) verificados ahí mismo.
+#
+# Por qué además hace falta EXCLUIRLOS de _segment_narrative (ver su uso más abajo, en
+# translate_narrative_from_definitive_es): se confirmó con un caso real que, sin excluirlo, un título
+# como "RISK FACTOR ANALYSIS" puede terminar reutilizado como párrafo DONANTE para una viñeta española
+# totalmente distinta (ej. "Reducción en activos no corrientes...") — el emparejamiento por FORMA
+# (_segment_signature, ver _align_segments) no distingue un título real de una viñeta común, así que un
+# título de una sola viñeta puede calzar por pura coincidencia estructural con el conteo de un bloque
+# de contenido de otra sección completamente distinta. El resultado observado fue el título
+# desapareciendo del documento por completo (su texto quedaba sobrescrito) — no solo un problema de
+# negrita. Excluirlos de la segmentación los deja protegidos igual que ya protege a HEADER_TEMPLATES_EN.
+STATIC_SUBTITLES_EN = [
+    (r"^REASONED ANALYSIS OF HORTIFRUT", True, True),
+    (r"^HIGHLIGHTS OF THE PERIOD AND SUBSEQUENT FACTS\s*$", True, True),
+    (r"^SUMMARY OF THE PERIOD\s*$", True, True),
+    (r"^INCOME STATEMENT ANALYSIS\s*$", True, True),
+    (r"^Main Components of Income\s*$", True, False),
+    (r"^Main Components of Costs and Expenses\s*$", True, False),
+    (r"^Main Components of Sales Costs\s*$", True, True),
+    (r"^Main Components of Administrative Expenses\s*$", True, True),
+    (r"^Main Components of Other Expenses per function\s*$", True, True),
+    (r"^Impairment in the value of assets\s*$", True, True),
+    (r"^Other Components of Income Statement\s*$", True, False),
+    (r"^(Income|Gains) tax expense\s*$", True, False),
+    (r"^Other Result Indicators\s*$", True, False),
+    (r"^Activity Indicators:?\s*$", True, False),
+    (r"^COMPARATIVE ANALYSIS OF MAIN TENDENCIES\s*$", True, False),
+    (r"^Net Financial Debt\s*$", True, False),
+    (r"^[a-zA-Z]\)\s*Main Financial Indicators\s*$", True, False),
+    (r"^\d+\.\s*ANALYSIS OF STATEMENT OF FINANCIAL POSITION\s*$", True, True),
+    (r"^Main items of the Consolidated Statement of Financial Position\s*$", True, True),
+    (r"^MAIN COMPONENTS OF NET OPERATING INVESTMENT AND FINANCING CASH FLOWS\s*$", True, True),
+    (r"^RISK FACTOR ANALYSIS\s*$", True, True),
+    (r"^Liquidity and Financing Risk\s*$", True, False),
+    (r"^Exchange Rate Risk\s*$", True, False),
+    (r"^Exposure in currencies different to the functional currency\s*$", True, False),
+    (r"^Interest Rate Risk\s*$", True, False),
+    (r"^Operating Risks\s*$", True, False),
+    (r"^Insurance\s*$", True, False),
+    (r"^Risk in the Estimations\s*$", True, False),
+    (r"^Risk Associated to Merger and Acquisition Process\s*$", True, False),
+]
+
+def apply_static_subtitle_formatting_en(doc, log):
+    """Refuerza negrita/subrayado (STATIC_SUBTITLES_EN) sobre los subtítulos/títulos de sección que no
+    cambian de un trimestre a otro, SIN tocar su texto (a diferencia de apply_header_templates, que sí
+    reescribe el texto porque esos sí dependen del período). Se corre después del barrido narrativo
+    (translate_narrative_from_definitive_es) para restaurar la negrita/subrayado perdida en una vuelta
+    anterior de este mismo pipeline (feedback Melissa, Oct26, punto 6), sin depender de heredar el
+    formato de un párrafo reutilizado (ver docstring de STATIC_SUBTITLES_EN para el motivo)."""
+    compiled = [(re.compile(pat), b, u) for pat, b, u in STATIC_SUBTITLES_EN]
+    n = 0
+    for para in doc.paragraphs:
+        t = para.text.strip()
+        if not t:
+            continue
+        for rx, force_bold, force_underline in compiled:
+            if rx.search(t):
+                for r in para.runs:
+                    if r.text.strip():
+                        r.bold = force_bold
+                        r.underline = force_underline
+                n += 1
+                break
+    if n:
+        log.append(
+            f"[OK] (EN) Formato de {n} subtítulo(s)/título(s) de sección reforzado (negrita/subrayado "
+            "verificados contra el Word en inglés oficial de referencia), sin tocar su texto."
+        )
 
 def collect_original_causes(doc, log):
     causes = {}
@@ -324,10 +444,55 @@ def _next_list_block(doc, start, max_scan=14):
             break
     return items, j
 
-def _replace_list_items(bullet_paras, items_texts):
+def _apply_numpr_from_source(target_paras, source_paras):
+    """Copia el numPr (numId/ilvl — bullet simple vs. "a) b) c)", etc.) de cada párrafo de
+    `source_paras` (español, ya con su propio numPr corregido vía apply_bridge_bullets/
+    _normalize_bullet_numbering del lado ES) al párrafo correspondiente de `target_paras` (inglés),
+    uno a uno. Se usa en vez de ASM_ES._normalize_bullet_numbering (que normaliza una lista CONTRA SÍ
+    MISMA, usando su propio primer párrafo como referencia) porque en inglés cada viñeta narrativa
+    suele quedar aislada en su propio segmento de un solo párrafo (separada de sus vecinas por varias
+    líneas en blanco en el Word base, ver docstring de translate_narrative_from_definitive_es) — sin
+    ningún hermano en el MISMO segmento con el que comparar, normalizar-contra-sí-mismo no corrige
+    nada. Copiar del español es además justo lo que pidió Melissa (Oct26): "la estructura debe ser
+    la misma entre el texto definitivo en español y la versión traducida en inglés". Si
+    `target_paras` tiene más párrafos que `source_paras` (una viñeta de más en inglés), los
+    sobrantes se alinean con el último numPr conocido de `source_paras`."""
+    if not source_paras:
+        ASM_ES._normalize_bullet_numbering(target_paras)
+        return
+    last_ref = None
+    for i, p in enumerate(target_paras):
+        src = source_paras[i] if i < len(source_paras) else source_paras[-1]
+        ref = ASM_ES._capture_numpr(src)
+        if ref is not None:
+            last_ref = ref
+        ASM_ES._apply_numpr(p, last_ref)
+
+def _replace_list_items(bullet_paras, items_texts, numpr_source=None, neutralize_existing=False):
+    # numpr_source (lista de párrafos en ESPAÑOL alineados 1 a 1, opcional): si se pasa, el numId/
+    # ilvl de cada párrafo en inglés se copia del español correspondiente en vez de normalizarse
+    # contra el primer párrafo de esta misma lista (ver _apply_numpr_from_source) — mismo bug
+    # reportado por Melissa en el lado español (un "efecto" puntual quedaba con numeración "a) b)
+    # c)" en vez de viñeta simple, arrastrado desde el Word base) puede venir igual en el Word base
+    # en inglés, y set_paragraph_text nunca toca el numPr, solo el texto.
+    #
+    # neutralize_existing: usado por translate_narrative_from_definitive_es (alineación por FORMA,
+    # no por contenido, ver _align_segments/_segment_signature). Ahí un párrafo "existente" que se
+    # reutiliza no es necesariamente del mismo tipo de contenido que la viñeta española que le toca:
+    # confirmado con un caso real donde la viñeta en inglés reutilizada para "Reducción en activos no
+    # corrientes..." resultó ser, por puro accidente de alineación estructural, el encabezado
+    # "RISK FACTOR ANALYSIS " (negrita+subrayado, de una sección totalmente distinta del documento) —
+    # mantener su negrita/subrayado como si aplicara al contenido NUEVO fue el bug. Con
+    # neutralize_existing=True se despoja ese párrafo de negrita/subrayado directo ANTES de
+    # reescribirle el texto, igual que ya se hace con los párrafos recién clonados (ver
+    # _neutralize_cloned_paragraph_format). No se activa por defecto porque otros llamadores (ej. las
+    # viñetas EBITDA/bridge en _replace_bridge_span_split) sí reutilizan viñetas contiguas del MISMO
+    # bloque, donde conservar su formato original es correcto.
     n_existing = len(bullet_paras)
     n_target = len(items_texts)
     for k in range(min(n_existing, n_target)):
+        if neutralize_existing:
+            _neutralize_cloned_paragraph_format(bullet_paras[k])
         set_paragraph_text(bullet_paras[k], items_texts[k])
     if n_target > n_existing:
         final = list(bullet_paras)
@@ -336,15 +501,26 @@ def _replace_list_items(bullet_paras, items_texts):
             new_el = copy.deepcopy(last_el)
             last_el.addnext(new_el)
             new_para = docx.text.paragraph.Paragraph(new_el, bullet_paras[-1]._parent)
+            # Igual que en _clone_paragraph_after/_before: un ítem de viñeta recién clonado no debe
+            # heredar negrita/subrayado directo del run del ÚLTIMO ítem existente (que puede traer esa
+            # marca por un accidente de formato de otro trimestre, no porque corresponda a contenido
+            # nuevo) — confirmado con el mismo caso real ("Reducción en activos no corrientes...").
+            _neutralize_cloned_paragraph_format(new_para)
             set_paragraph_text(new_para, items_texts[k])
             final.append(new_para)
             last_el = new_el
-        return final
+        result = final
     elif n_existing > n_target:
+        result = list(bullet_paras[:n_target])
         for p in bullet_paras[n_target:]:
             p._p.getparent().remove(p._p)
-        return list(bullet_paras[:n_target])
-    return list(bullet_paras)
+    else:
+        result = list(bullet_paras)
+    if numpr_source is not None:
+        _apply_numpr_from_source(result, numpr_source)
+    else:
+        ASM_ES._normalize_bullet_numbering(result)
+    return result
 
 def build_bridge_items_6m(wb, max_items=6):
     ebitda_text = E.p_ebitda_bullet_6m(wb)
@@ -577,6 +753,9 @@ def _build_image_table_map(word_path, log):
     ai, ti = 0, 0
     n_img, n_tab = len(anchors_for_image), len(TABLE_ANCHORS_EN)
     unmatched_images = []
+    skipped_tkeys = []  # tablas saltadas en el reacomodo (ver [AVISO] más abajo) — antes esto pasaba
+    # en silencio: así fue como 'Riesgos' quedó sin su imagen sin que ningún aviso lo mencionara
+    # (confirmado con los .docx reales de Melissa, oct-2026, punto 5 — ver _ensure_risks_image_en).
     while ai < n_img and ti < n_tab:
         text = anchors_for_image[ai]
         rx, tkey = TABLE_ANCHORS_EN[ti]
@@ -590,6 +769,7 @@ def _build_image_table_map(word_path, log):
                 break
             rx2, _tkey2 = TABLE_ANCHORS_EN[ti + look]
             if re.search(rx2, text):
+                skipped_tkeys.extend(tk for _, tk in TABLE_ANCHORS_EN[ti:ti + look])
                 ti += look
                 found_ahead = True
                 break
@@ -604,6 +784,12 @@ def _build_image_table_map(word_path, log):
             f"{unmatched_images} contando solo imágenes) no calzaron con ninguna tabla conocida por su "
             "texto de contexto — se dejaron tal cual, sin reemplazar (puede ser una tabla que ese "
             "trimestre viene como imagen en un formato distinto al de referencia)."
+        )
+    if skipped_tkeys:
+        log.append(
+            f"[AVISO] (EN) {len(skipped_tkeys)} tabla(s) se saltaron al reacomodar la coincidencia "
+            f"imagen↔tabla (ver aviso de imágenes que no calzaron, arriba) y pueden haber quedado SIN "
+            f"su imagen en el documento final — revísalas a mano: {skipped_tkeys}"
         )
     if ti < n_tab:
         faltantes = [tkey for _, tkey in TABLE_ANCHORS_EN[ti:]]
@@ -783,12 +969,12 @@ def update_flujo_caja_table_en(doc, wb, log):
 
     if 'FdeC' not in wb.sheetnames:
         log.append("[AVISO] (EN) No encontré la hoja 'FdeC' en el Excel: no se actualizó el Cash Flow.")
-        return
+        return False
     ws = wb['FdeC']
     hr, hc = ASM_ES._find_fdec_header(ws)
     if hr is None:
         log.append("[AVISO] (EN) No encontré el encabezado del Flujo de Efectivo en la hoja 'FdeC': no se actualizó.")
-        return
+        return False
     cur_col, prior_col = hc + 1, hc + 2
     header_cur_label = _translate_fdec_header_en(str(ws.cell(hr, cur_col).value or '').strip())
     header_prior_label = _translate_fdec_header_en(str(ws.cell(hr, prior_col).value or '').strip())
@@ -819,7 +1005,7 @@ def update_flujo_caja_table_en(doc, wb, log):
             break
     if target_table is None:
         log.append("[AVISO] (EN) No encontré la tabla de Cash Flow en el Word en inglés: no se actualizó.")
-        return
+        return False
 
     n_updated = 0
     missing = []
@@ -851,6 +1037,138 @@ def update_flujo_caja_table_en(doc, wb, log):
             f"usaron porque no tengo cómo buscarlas en el Word en inglés): {'; '.join(unmapped_es)}"
         )
     log.append("[INFO] (EN) Cash Flow: la columna de Comments no se toca — complétala tú misma cada trimestre.")
+    return True
+
+# ---------- Clonar la tabla de Cash Flow desde el español (si el Word base en inglés no trae tabla
+# nativa, solo una imagen vieja) ----------
+# Feedback Melissa (Oct26), con los .docx reales en mano: "La tabla del Flujo de Caja en inglés, no
+# está igual a la de español. Ni en estructura, formato ni en datos." Root-cause confirmado contra el
+# Word en inglés REAL de Hortifrut (Analisis_Razonado_Marzo_2026_16_06_26_English.docx, el documento
+# oficial de la Compañía, no uno generado por esta app): ahí, igual que en el Word que subió Melissa,
+# la sección "MAIN COMPONENTS OF NET OPERATING INVESTMENT AND FINANCING CASH FLOWS" va seguida de una
+# imagen (.emf) pegada a mano, nunca de una tabla nativa de Word editable como en español — por eso
+# update_flujo_caja_table_en (arriba) jamás encuentra nada que actualizar ahí: no es un bug de esta
+# app, es que esa tabla, en inglés, nunca tuvo esa forma en los Word base de Hortifrut.
+# Mientras Melissa no reemplace esa imagen por una tabla nativa en su plantilla base en inglés (lo
+# ideal a mediano plazo, para que vuelva a quedar 100% editable igual que en español), esta función
+# CLONA la tabla nativa YA ACTUALIZADA del Word en español definitivo de este trimestre
+# (word_es_edited_path) dentro del Word en inglés, en el lugar de esa imagen vieja. Es seguro clonar el
+# <w:tbl> completo tal cual (deepcopy, cross-documento) porque ambos Word comparten la misma plantilla
+# corporativa (mismos w:styleId, verificado contra los .docx reales de Melissa) — así se conserva
+# exactamente la misma estructura y formato (anchos de columna, bordes, negrita de la fila Total) que
+# la tabla en español, no solo una aproximación. Luego de clonar, solo se traduce el TEXTO: las
+# etiquetas de cada fila (vía FDEC_LABELS_EN — después de esto, generate_en vuelve a llamar a
+# update_flujo_caja_table_en, que ahora SÍ encuentra la tabla recién clonada y le pone las cifras del
+# Excel ya en formato en-US) y la columna de Comentarios (texto libre que Melissa escribe a mano cada
+# trimestre: se traduce con DeepL si está configurado, igual que el resto del documento; si no, se dej
+# a en español con el mismo aviso que usa el resto del texto narrativo).
+def _find_cash_flow_image_anchor(doc_en):
+    """Ubica, en el Word en inglés, el párrafo de encabezado estático de esta sección (no cambia de
+    trimestre a trimestre, no está en HEADER_TEMPLATES_EN) y, si lo encuentra, el párrafo con la
+    imagen vieja que suele venir justo después (separados por alguna línea en blanco, igual que en los
+    .docx reales inspeccionados). Devuelve (anchor_para, image_para_o_None)."""
+    idx, anchor_para = find_paragraph(
+        doc_en, r"MAIN (COMPONENTS OF NET OPERATING|SOURCES AND USES OF FUNDS)")
+    if anchor_para is None:
+        return None, None
+    paras = doc_en.paragraphs
+    j = idx + 1
+    while j < len(paras) and not paras[j].text.strip():
+        if _has_image_el(paras[j]):
+            return anchor_para, paras[j]
+        j += 1
+    return anchor_para, None
+
+def _clone_flujo_caja_table_from_es(doc_en, word_es_edited_path, log):
+    try:
+        doc_es = docx.Document(word_es_edited_path)
+    except Exception as ex:
+        log.append(f"[AVISO] (EN) No pude abrir el Word en español para clonar la tabla de Cash Flow: {ex}")
+        return False
+
+    es_table = None
+    for t in doc_es.tables:
+        try:
+            first_cell_text = t.rows[0].cells[0].text
+        except Exception:
+            continue
+        if re.search(ASM_ES.FLUJO_CAJA_HEADER_ANCHOR, first_cell_text):
+            es_table = t
+            break
+    if es_table is None:
+        log.append("[AVISO] (EN) No encontré la tabla de Flujo de Efectivo en el Word en español: no "
+                    "pude clonarla al inglés.")
+        return False
+
+    anchor_para, image_para = _find_cash_flow_image_anchor(doc_en)
+    if anchor_para is None:
+        log.append("[AVISO] (EN) No encontré el encabezado de la sección de Cash Flow en el Word en "
+                    "inglés (texto esperado: 'MAIN COMPONENTS OF NET OPERATING...'): no pude insertar "
+                    "la tabla clonada desde el español.")
+        return False
+
+    insert_after_el = image_para._p if image_para is not None else anchor_para._p
+    if image_para is not None:
+        old_p = image_para._p
+        insert_after_el = old_p
+    new_tbl = copy.deepcopy(es_table._tbl)
+    insert_after_el.addnext(new_tbl)
+    if image_para is not None:
+        old_p.getparent().remove(old_p)
+
+    new_table_obj = docx.table.Table(new_tbl, doc_en)
+
+    n_translated = 0
+    n_untranslated = 0
+    for ri, row in enumerate(new_table_obj.rows):
+        cells = row.cells
+        if not cells:
+            continue
+        if ri == 0:
+            # Fila de encabezado: el texto de esta celda es lo que update_flujo_caja_table_en busca
+            # (regex 'Main sources and uses of funds') para reconocer la tabla — sin traducirla acá,
+            # la llamada de vuelta a esa función (ver generate_en) no la encontraría nunca.
+            # Texto exacto verificado contra el Word en inglés real de Hortifrut de Jun26
+            # (Earning_Report_June_2026_27_08_26.docx), donde esta SÍ es una tabla nativa.
+            ASM_ES.set_cell_text(cells[0], 'Main sources and uses of funds in the period (US$ million)')
+            continue
+        norm = ASM_ES._norm_label(cells[0].text)
+        en_label = FDEC_LABELS_EN.get(norm)
+        if en_label:
+            ASM_ES.set_cell_text(cells[0], en_label)
+            n_translated += 1
+        else:
+            n_untranslated += 1
+            log.append(
+                "[AVISO] (EN) Fila del Flujo de Efectivo sin traducción registrada en FDEC_LABELS_EN, "
+                f"se dejó en español: {cells[0].text.strip()[:60]!r}"
+            )
+
+    deepl_on = DT.is_configured()
+    for ri, row in enumerate(new_table_obj.rows):
+        cells = row.cells
+        if len(cells) < 4:
+            continue
+        if ri == 0:
+            ASM_ES.set_cell_text(cells[3], 'Comments')
+            continue
+        es_comment = cells[3].text.strip()
+        if not es_comment:
+            continue
+        translated = DT.translate_es_en(convert_es_numbers_to_en(es_comment)) if deepl_on else None
+        if translated:
+            ASM_ES.set_cell_text(cells[3], translated)
+        elif deepl_on:
+            ASM_ES.set_cell_text(cells[3], f"{NO_DEEPL_FAILED_PREFIX_EN}{es_comment}")
+        else:
+            ASM_ES.set_cell_text(cells[3], f"{NO_DEEPL_PREFIX_EN}{es_comment}")
+
+    log.append(
+        "[OK] (EN) Tabla de Cash Flow clonada desde el Word en español (reemplaza la imagen vieja "
+        f"desactualizada) — {n_translated} fila(s) traducida(s), estructura y formato ahora calzan "
+        "exactamente con la tabla en español."
+    )
+    return True
 
 # Algunas plantillas Word en inglés (vistas en la de marzo 2026, pero no en la de junio) traen, debajo
 # del texto "Main critical risks faced as of ... are the following:", una tabla NATIVA de Word vieja
@@ -883,6 +1201,82 @@ def remove_stale_risk_table_en(doc, log):
             "plantilla ('Type of Risk / Name of the Risk / ...') que no existen en la versión en español: "
             "el detalle real de riesgos ya lo muestra la imagen traducida más abajo en el documento."
         )
+
+# ---------- Red de seguridad: insertar la tabla de riesgos críticos si quedó ausente ----------
+# Feedback Melissa (Oct26), punto 5: "En inglés faltó la tabla de riesgos criticos." Root-cause
+# confirmado con los .docx reales: en el Word en inglés que ella sube, después de "Main critical
+# risks faced as of ... are the following:" NO hay nada — ni la tabla nativa vieja (la que
+# remove_stale_risk_table_en elimina arriba, asumiendo que la imagen real la reemplaza) ni ninguna
+# imagen. collect_and_render_tables_en (TABLE_ANCHORS_EN) solo SUSTITUYE imágenes que ya existen en el
+# Word base: si no hay ninguna imagen ahí para sustituir, la tabla 'Riesgos' queda completamente
+# ausente y nada lo avisa (el único aviso que había, sobre imágenes sin calzar, habla de imágenes
+# SOBRANTES, no de tablas FALTANTES en medio de la lista — ver _build_image_table_map, que ahora
+# además deja constancia en el log de cualquier tabla saltada en el reacomodo). Esta función es la red
+# de seguridad final: si de verdad no quedó ninguna imagen ahí, renderiza la tabla 'Riesgos' (mismo
+# Excel/formato que las otras 17 tablas-imagen en inglés, ver render_tables_v5.TABLES_EN) y la inserta
+# directamente, en vez de depender de que ya exista una imagen para sustituir.
+    # El ancla busca tanto el texto correcto en inglés como su versión en español-con-prefijo: esta
+    # oración trae la fecha del trimestre (como "Al 30 de junio de 2026" en HEADER_TEMPLATES), así
+    # que SIEMPRE difiere de la del trimestre anterior y translate_narrative_from_definitive_es
+    # siempre la reescribe — con DeepL apagado (caso por defecto), el resultado NO es el texto en
+    # inglés sino el español con el prefijo "SPANISH — DeepL not configured...", que no calzaría con
+    # un ancla que solo buscara el inglés (confirmado con los .docx reales de Melissa: así se perdió
+    # el ancla la primera vez que se probó este fix).
+_RISKS_HEADER_ANCHOR_RE = r"^(Main critical risks faced as of|(SPANISH.{0,80}:\s*)?Los principales riesgos cr[ií]ticos que se enfrentan al)"
+
+def _ensure_risks_image_en(doc, wb, log):
+    anchor_idx, anchor_para = find_paragraph(doc, _RISKS_HEADER_ANCHOR_RE)
+    if anchor_para is None:
+        log.append(
+            "[AVISO] (EN) No encontré el encabezado 'Main critical risks faced as of...' en el Word "
+            "en inglés: no pude verificar si la tabla de riesgos críticos quedó ausente."
+        )
+        return
+    paras = doc.paragraphs
+    j = anchor_idx + 1
+    last_el = anchor_para._p
+    while j < len(paras) and not paras[j].text.strip():
+        if _has_image_el(paras[j]):
+            return  # ya hay una imagen ahí; collect_and_render_tables_en se encarga de actualizarla
+        last_el = paras[j]._p
+        j += 1
+
+    rt_dir = os.path.dirname(__file__)
+    sys.path.insert(0, rt_dir)
+    import render_tables_v5 as RT
+    spec = RT.TABLES.get('Riesgos')
+    if not spec or spec['sheet'] not in wb.sheetnames or 'Riesgos' not in RT.TABLES_EN:
+        log.append(
+            "[AVISO] (EN) La tabla de riesgos críticos no aparece en el Word en inglés y tampoco pude "
+            "generarla (falta la hoja 'Riesgos' en el Excel o su configuración en render_tables_v5): "
+            "revisa esa sección a mano."
+        )
+        return
+
+    img_dir = tempfile.mkdtemp()
+    out_png = os.path.join(img_dir, 'Riesgos_faltante.png')
+    try:
+        usable_w_emu = doc.sections[0].page_width - doc.sections[0].left_margin - doc.sections[0].right_margin
+        usable_width_in = usable_w_emu / ASM_ES.EMU_PER_INCH
+        RT.render_table_en(wb, 'Riesgos', out_png, dpi=300, usable_width_in=usable_width_in)
+        from PIL import Image as PILImage
+        with PILImage.open(out_png) as im:
+            w_px, h_px = im.size
+        new_w_emu = min(usable_w_emu, int(w_px / 300 * ASM_ES.EMU_PER_INCH))
+        new_h_emu = int(new_w_emu * h_px / w_px)
+        new_p = docx.oxml.parser.OxmlElement('w:p')
+        last_el.addnext(new_p)
+        new_para = docx.text.paragraph.Paragraph(new_p, anchor_para._parent)
+        new_para.add_run().add_picture(out_png, width=docx.shared.Emu(new_w_emu), height=docx.shared.Emu(new_h_emu))
+        log.append(
+            "[OK] (EN) La tabla de riesgos críticos no tenía ninguna imagen que sustituir en el Word en "
+            "inglés (quedaba completamente ausente): se generó y se insertó de nuevo, con el mismo "
+            "detalle/formato que la versión en español."
+        )
+    except Exception as ex:
+        log.append(f"[ERROR] (EN) No pude generar/insertar la tabla de riesgos críticos faltante: {ex}")
+    finally:
+        shutil.rmtree(img_dir, ignore_errors=True)
 
 # ---------- Traducción general de TODO el texto narrativo, vía DeepL ----------
 # Antes, esto solo cubría el texto libre (párrafos que no calzaban con ninguna plantilla de
@@ -982,6 +1376,21 @@ def _segment_signature(seg):
     # bucket que su propia traducción, aunque fuera exactamente la misma oración — se revirtió.
     return 'L' if _is_list_para(seg[0]) else 'N'
 
+def _neutralize_cloned_paragraph_format(paragraph):
+    """Despoja un párrafo recién clonado (ver _clone_paragraph_after/_clone_paragraph_before) de
+    negrita/subrayado directos en sus runs, dejando solo fuente/tamaño. Sin esto, un párrafo nuevo
+    clonado de un VECINO que por pura casualidad era un título/subtítulo en negrita+subrayado (ej.
+    clonar justo después de "Principales partidas del Estado de Situación Financiera Consolidado")
+    heredaba esa negrita/subrayado como si el contenido NUEVO (una oración narrativa común, nunca un
+    título) también debiera llevarla — confirmado: así quedaba una oración de bridge común
+    ("Reducción en activos no corrientes...") en negrita y subrayada por error, tanto en los .docx
+    reales de Melissa como en el Word en inglés oficial de referencia (Marzo 2026). Un párrafo recién
+    insertado no es un título heredado de nadie: debe partir neutro, y set_paragraph_text se encarga
+    de ponerle `{{...}}` si de verdad corresponde una frase líder en negrita."""
+    for r in paragraph.runs:
+        r.bold = False
+        r.underline = False
+
 def _clone_paragraph_after(anchor_para, n=1):
     """Clona `anchor_para` (su mismo estilo/formato) `n` veces, insertando los clones inmediatamente
     después de `anchor_para`. Devuelve la lista de los nuevos objetos Paragraph (todavía con el texto
@@ -992,7 +1401,9 @@ def _clone_paragraph_after(anchor_para, n=1):
     for _ in range(n):
         new_el = copy.deepcopy(last_el)
         last_el.addnext(new_el)
-        new_paras.append(docx.text.paragraph.Paragraph(new_el, anchor_para._parent))
+        new_para = docx.text.paragraph.Paragraph(new_el, anchor_para._parent)
+        _neutralize_cloned_paragraph_format(new_para)
+        new_paras.append(new_para)
         last_el = new_el
     return new_paras
 
@@ -1007,7 +1418,9 @@ def _clone_paragraph_before(anchor_para, n=1):
     for _ in range(n):
         new_el = copy.deepcopy(anchor_el)
         anchor_el.addprevious(new_el)
-        new_paras.append(docx.text.paragraph.Paragraph(new_el, anchor_para._parent))
+        new_para = docx.text.paragraph.Paragraph(new_el, anchor_para._parent)
+        _neutralize_cloned_paragraph_format(new_para)
+        new_paras.append(new_para)
     return new_paras
 
 def _remove_segment(seg):
@@ -1035,7 +1448,19 @@ def _align_segments(segs_es, segs_en, log):
     el último párrafo en inglés visto (mismo mecanismo de clonado que ya usa _replace_list_items) para
     poder escribir ahí con el formato correcto. Cuando a `segs_en` le sobra un segmento sin
     contraparte en español (quedó obsoleto / ya no existe este trimestre), se BORRA del documento en
-    vez de dejarlo tal cual (que es justo lo que producía el dato viejo duplicado)."""
+    vez de dejarlo tal cual (que es justo lo que producía el dato viejo duplicado).
+
+    Cada tupla devuelta en `pairs` trae un tercer elemento `trusted` (bool): True solo cuando el
+    segmento en inglés viene de un tramo 'equal' del diff (misma firma estructural Y misma posición
+    relativa en la secuencia — la señal más fuerte de que de verdad es la contraparte de ese segmento
+    español). False para cualquier segmento en inglés reutilizado dentro de un tramo 'replace' (la
+    cantidad de segmentos no calzaba ahí, así que el emparejamiento es solo por POSICIÓN dentro del
+    tramo, no por contenido) o para un segmento recién clonado. Esto importa para el llamador: un
+    segmento 'replace' puede terminar reutilizando un párrafo en inglés que NO tiene relación alguna de
+    contenido con el español que le toca — confirmado con un caso real donde la viñeta reutilizada para
+    "Reducción en activos no corrientes..." resultó ser, por puro accidente de alineación, el
+    encabezado "RISK FACTOR ANALYSIS " (negrita+subrayado, de una sección totalmente distinta) — así
+    que el llamador solo debe confiar en conservar negrita/subrayado existente cuando trusted=True."""
     sig_es = [_segment_signature(s) for s in segs_es]
     sig_en = [_segment_signature(s) for s in segs_en]
     sm = difflib.SequenceMatcher(None, sig_en, sig_es, autojunk=False)
@@ -1050,7 +1475,7 @@ def _align_segments(segs_es, segs_en, log):
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == 'equal':
             for k in range(i2 - i1):
-                pairs.append((segs_es[j1 + k], segs_en[i1 + k]))
+                pairs.append((segs_es[j1 + k], segs_en[i1 + k], True))
                 last_en_para = segs_en[i1 + k][-1]
                 n_equal += 1
             continue
@@ -1058,7 +1483,7 @@ def _align_segments(segs_es, segs_en, log):
         n_es_here = j2 - j1
         n_both = min(n_en_here, n_es_here)
         for k in range(n_both):
-            pairs.append((segs_es[j1 + k], segs_en[i1 + k]))
+            pairs.append((segs_es[j1 + k], segs_en[i1 + k], False))
             last_en_para = segs_en[i1 + k][-1]
         if n_en_here > n_both:
             # Sobran segmentos en inglés sin contraparte en español este trimestre: se borran (en vez
@@ -1080,7 +1505,7 @@ def _align_segments(segs_es, segs_en, log):
                     new_seg = _clone_paragraph_before(first_en_para, 1)
                 else:
                     new_seg = []
-                pairs.append((segs_es[k], new_seg))
+                pairs.append((segs_es[k], new_seg, False))
                 n_inserted += 1
 
     if n_inserted or n_deleted:
@@ -1114,7 +1539,9 @@ def _align_segments_readonly(segs_a, segs_b):
                 pairs.append((segs_a[i1 + k], segs_b[j1 + k]))
     return pairs
 
-DEEPL_PROPOSAL_PREFIX_EN = "DeepL translation — please verify: "
+# DEEPL_PROPOSAL_PREFIX_EN: ya no se usa (feedback Melissa, Oct26 — ver más abajo, en el bloque que
+# arma target_texts): se dejó de anteponer este prefijo a las oraciones SÍ traducidas por DeepL,
+# porque ahí el texto resultante es inglés completo y utilizable, no algo pendiente de revisar.
 NO_DEEPL_PREFIX_EN = "SPANISH — DeepL not configured, translate manually: "
 # NO_DEEPL_FAILED_PREFIX_EN: mismo caso de "se quedó en español, pendiente de traducir a mano", pero
 # cuando DeepL SÍ está configurado y la llamada de todos modos falló (key inválida, cuota agotada,
@@ -1237,7 +1664,12 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
         periods_es_curr = None
 
     header_anchors_es = [re.compile(a) for a, _ in ASM_ES.HEADER_TEMPLATES]
-    header_anchors_en = [re.compile(a) for a, _ in HEADER_TEMPLATES_EN]
+    # Se agregan también los patrones de STATIC_SUBTITLES_EN (ver su docstring): además de
+    # HEADER_TEMPLATES_EN, estos títulos/subtítulos estáticos quedan excluidos de la segmentación para
+    # que nunca puedan terminar reutilizados como donantes de contenido no relacionado.
+    header_anchors_en = [re.compile(a) for a, *_ in HEADER_TEMPLATES_EN] + [
+        re.compile(p) for p, *_ in STATIC_SUBTITLES_EN
+    ]
 
     segs_es = _segment_narrative(doc_es, header_anchors_es)
     segs_en = _segment_narrative(doc_en, header_anchors_en)
@@ -1327,13 +1759,14 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
     deepl_error_reasons = []
 
     n_segs_sin_destino = 0
-    for es_items, en_items in aligned_pairs:
+    for es_items, en_items, trusted in aligned_pairs:
         if not en_items:
             # No había ningún párrafo en inglés disponible para clonar (caso extremo: el segmento
             # nuevo es el primero de todo el documento) — no hay dónde escribir, se deja constancia.
             n_segs_sin_destino += 1
             continue
-        if len(es_items) != len(en_items):
+        count_mismatch = len(es_items) != len(en_items)
+        if count_mismatch:
             n_segs_mismatch += 1
 
         target_texts = []
@@ -1376,13 +1809,22 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
             # alguno de estos tres casos — con el marcador [[...]] eso resaltaba en amarillo la
             # oración COMPLETA (no un detalle puntual como la "causa" del lado español, ver
             # assemble.py), tiñendo de amarillo la mayor parte del documento. Se saca el marcador
-            # [[...]] (ya no se resalta) pero se deja el prefijo de texto plano ("DeepL translation —
-            # please verify:", "SPANISH — DeepL not configured, translate manually:", etc.): sigue
-            # siendo fácil encontrar con Ctrl+F qué oraciones faltan por revisar/traducir, solo que ya
-            # no satura la vista de amarillo.
+            # [[...]] (ya no se resalta).
+            #
+            # Segunda vuelta (feedback Melissa, Oct26, con DeepL ya configurado): "la mayoria de los
+            # textos son de DeepL translation. Quitar los textos que dicen: DeepL translation —
+            # please verify: en todo el documento." Acá `translated` SÍ es una traducción al inglés
+            # completa y utilizable, así que se saca también el prefijo (no solo el resaltado): no hay
+            # nada que avisar, es una oración en inglés lista para usar.
+            #
+            # Los otros dos casos (DeepL apagado, o encendido pero la llamada falló) son distintos:
+            # ahí lo que queda en el documento es TEXTO EN ESPAÑOL sin traducir — sacarle también el
+            # prefijo dejaría español mezclado en silencio dentro del Word en inglés, sin ninguna
+            # marca de que falta traducirlo (peor que el resaltado que se sacó: ahí al menos se nota
+            # que algo falta). Por eso estos dos conservan el prefijo de texto plano (sin resaltar).
             translated = DT.translate_es_en(convert_es_numbers_to_en(es_text)) if deepl_on else None
             if translated:
-                target_texts.append(f"{DEEPL_PROPOSAL_PREFIX_EN}{_sanitize_for_markup(translated)}")
+                target_texts.append(_sanitize_for_markup(translated))
                 n_translated += 1
             elif deepl_on:
                 target_texts.append(f"{NO_DEEPL_FAILED_PREFIX_EN}{_sanitize_for_markup(es_text)}")
@@ -1395,7 +1837,20 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
                 target_texts.append(f"{NO_DEEPL_PREFIX_EN}{_sanitize_for_markup(es_text)}")
                 n_fallback += 1
 
-        _replace_list_items(en_items, target_texts)
+        # neutralize_existing: ver docstring de _replace_list_items. Se activa si el emparejamiento no
+        # es de fiar por CUALQUIERA de dos señales independientes: (a) no vino de un tramo 'equal' del
+        # diff estructural (trusted=False, ver _align_segments), o (b) la cantidad de párrafos/viñetas
+        # no calzaba entre español e inglés para este segmento (count_mismatch — la señal más directa:
+        # si de verdad fuera la misma oración/bloque, debería traer la misma cantidad de viñetas en
+        # los dos idiomas). Confirmado con un caso real: 2 viñetas en español ("Reducción en activos no
+        # corrientes.../...corrientes...") terminaron emparejadas con 1 solo párrafo en inglés que
+        # además pertenecía a OTRA sección ("RISK FACTOR ANALYSIS", negrita+subrayado) — ese tramo SÍ
+        # venía marcado 'equal' (coincidencia de forma, no de contenido) pero el conteo no calzaba, así
+        # que (b) lo atrapa aunque (a) no alcance a hacerlo.
+        _replace_list_items(
+            en_items, target_texts, numpr_source=es_items,
+            neutralize_existing=(not trusted) or count_mismatch,
+        )
 
     total = n_reused + n_numbers_updated + n_translated + n_fallback
     if total:
@@ -1411,10 +1866,11 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
         if n_fallback:
             msg += f", {n_fallback} dejada(s) en español pendiente de traducir a mano"
         msg += (
-            ". Por pedido de Melissa (Oct26) ya no se resalta en amarillo: las oraciones traducidas "
-            "por DeepL o dejadas pendientes de traducir a mano llevan un prefijo de texto plano "
-            "(\"DeepL translation — please verify:\", \"SPANISH — DeepL not configured, translate "
-            "manually:\", etc.) en vez de resaltado — buscable con Ctrl+F."
+            ". Por pedido de Melissa (Oct26): lo traducido por DeepL queda como texto en inglés "
+            "normal, sin resaltar ni prefijo (ya no dice \"DeepL translation — please verify:\"); lo "
+            "que quedó pendiente de traducir a mano sigue en español, sin resaltar, con un prefijo de "
+            "texto plano (\"SPANISH — DeepL not configured, translate manually:\", etc.) — buscable "
+            "con Ctrl+F."
         )
         log.append(msg)
         if not deepl_on and n_fallback:
@@ -1474,14 +1930,20 @@ def generate_en(excel_path, word_path, out_path, word_es_edited_path, word_es_ba
     # eso es justo lo que eliminó el descalce de cifras que reportó Melissa (oct-2026).
     apply_header_templates(doc, periods, log)
     apply_global_sweep(doc, old_periods, periods, log)
-    update_flujo_caja_table_en(doc, wb, log)
+    found_native_flujo_caja = update_flujo_caja_table_en(doc, wb, log)
+    if not found_native_flujo_caja:
+        cloned_ok = _clone_flujo_caja_table_from_es(doc, word_es_edited_path, log)
+        if cloned_ok:
+            update_flujo_caja_table_en(doc, wb, log)
     remove_stale_risk_table_en(doc, log)
     translate_narrative_from_definitive_es(doc, word_es_edited_path, word_es_base_path, log,
                                             periods=periods, old_periods=old_periods)
+    apply_static_subtitle_formatting_en(doc, log)
 
     image_map, img_dir = collect_and_render_tables_en(wb, word_path, log, doc=doc)
     from assemble import fix_image_frame_sizes, swap_media_bytes
     fix_image_frame_sizes(doc, image_map, log)
+    _ensure_risks_image_en(doc, wb, log)
 
     tmp_text_docx = word_path + '.text_en.docx'
     doc.save(tmp_text_docx)
