@@ -311,6 +311,59 @@ def apply_static_subtitle_formatting_en(doc, log):
             "verificados contra el Word en inglés oficial de referencia), sin tocar su texto."
         )
 
+# STATIC_SUBTITLES_ES_PATTERNS: la contraparte en ESPAÑOL de STATIC_SUBTITLES_EN (ver su docstring) —
+# subtítulos/títulos de sección del Word en español que, igual que sus equivalentes en inglés, no
+# dependen del período y por eso NO están en ASM_ES.HEADER_TEMPLATES (esa lista solo trae los 7
+# encabezados que sí cambian de texto cada trimestre). Se usan SOLO acá, para excluirlos de
+# _segment_narrative(doc_es, ...) dentro de translate_narrative_from_definitive_es (ver su uso en
+# header_anchors_es, más abajo) — nunca tocan el Word en español en sí (ese lo genera assemble.py, no
+# este archivo).
+#
+# Por qué hace falta: se confirmó con un caso real (feedback Melissa, Oct26) que, sin esta exclusión,
+# un título como "DESTACADOS DEL PERIODO Y HECHOS POSTERIORES" queda incluido como un segmento
+# narrativo NORMAL del lado español (_segment_narrative no lo reconoce como encabezado), mientras que
+# su contraparte en inglés ("HIGHLIGHTS OF THE PERIOD AND SUBSEQUENT FACTS") SÍ está protegida del lado
+# inglés (ver STATIC_SUBTITLES_EN) y por lo tanto NO aparece como segmento ahí. Esa asimetría hace que
+# el título en español quede sin ninguna contraparte en inglés con la que alinearse, y
+# _align_segments lo trata como contenido NUEVO: se clona un párrafo random y se inserta una traducción
+# de respaldo de ese título DUPLICADO al lado del título real ya correcto — visto en el documento real
+# como "HIGHLIGHTS OF THE PERIOD..." apareciendo dos veces, con la numeración de encabezados salida de
+# secuencia entremedio. Excluir esto mismo título del lado español resuelve la asimetría de raíz.
+STATIC_SUBTITLES_ES_PATTERNS = [
+    r"^DESTACADOS DEL PERIODO Y HECHOS POSTERIORES\s*$",
+    r"^RESUMEN DEL PERIODO\s*$",
+    r"^ANALISIS DEL ESTADO DE RESULTADOS\s*$",
+    r"^Principales Componentes de( los)? Ingresos\s*$",
+    r"^Principales Componentes de Costos y Gastos\s*$",
+    r"^Principales Componentes de los Costos de Ventas\s*$",
+    r"^Principales Componentes de los Gastos de Administraci[oó]n\s*$",
+    r"^Principales Componentes de los Otros Gastos por funci[oó]n\s*$",
+    r"^Deterioro de valor de activos\s*$",
+    r"^Otros Componentes del Estado de Resultados\s*$",
+    r"^Gasto por impuesto a las ganancias\s*$",
+    r"^Otros Indicadores de Resultados\s*$",
+    r"^Indicadores de Actividad:?\s*$",
+    r"^AN[AÁ]LISIS COMPARATIVO DE PRINCIPALES TENDENCIAS\s*$",
+    r"^Deuda Financiera Neta\s*$",
+    r"^[a-zA-Z]\)\s*Principales Indicadores Financieros\s*$",
+    r"^\d*\.?\s*AN[AÁ]LISIS DEL ESTADO DE SITUACION FINANCIERA\s*$",
+    r"^Principales partidas del Estado de Situaci[oó]n Financiera Consolidado\s*$",
+    r"^PRINCIPALES COMPONENTES DE LOS FLUJOS NETOS OPERACIONALES",
+    r"^AN[AÁ]LISIS DE FACTORES DE RIESGO\s*$",
+    r"^Riesgos Financieros\s*$",
+    r"^Riesgo de Cr[eé]dito\s*$",
+    r"^Riesgo de Liquidez y Financiamiento\s*$",
+    r"^Riesgo de Tipo de Cambio\s*$",
+    r"^Exposici[oó]n en monedas distintas a la moneda funcional\s*$",
+    r"^Efectos en una Potencial Variaci[oó]n del Tipo de Cambio en las Cuentas Monetarias de Balance",
+    r"^Riesgo de la Tasa de Inter[eé]s\s*$",
+    r"^Riesgos Operacionales\s*$",
+    r"^Seguros\s*$",
+    r"^Riesgo en las Estimaciones\s*$",
+    r"^Efectos en la valorizaci[oó]n de los frutos que crecen en",
+    r"^Riesgo Asociado a Proceso de Fusiones y Adquisiciones\s*$",
+]
+
 def collect_original_causes(doc, log):
     causes = {}
     anchor_by_fn = {fn: anchor for anchor, fn in SINGLE_TEMPLATES_EN}
@@ -1679,7 +1732,13 @@ def translate_narrative_from_definitive_es(doc_en, word_es_edited_path, word_es_
     except Exception:
         periods_es_curr = None
 
-    header_anchors_es = [re.compile(a) for a, _ in ASM_ES.HEADER_TEMPLATES]
+    # Se agregan también los patrones de STATIC_SUBTITLES_ES_PATTERNS (ver su docstring): la
+    # contraparte en español de STATIC_SUBTITLES_EN, para que estos títulos/subtítulos estáticos
+    # queden excluidos de la segmentación en AMBOS idiomas por igual — si solo se excluyen del lado
+    # inglés (como pasaba antes), el título español queda sin contraparte y termina duplicado.
+    header_anchors_es = [re.compile(a) for a, _ in ASM_ES.HEADER_TEMPLATES] + [
+        re.compile(p) for p in STATIC_SUBTITLES_ES_PATTERNS
+    ]
     # Se agregan también los patrones de STATIC_SUBTITLES_EN (ver su docstring): además de
     # HEADER_TEMPLATES_EN, estos títulos/subtítulos estáticos quedan excluidos de la segmentación para
     # que nunca puedan terminar reutilizados como donantes de contenido no relacionado.
