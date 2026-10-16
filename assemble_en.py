@@ -1386,10 +1386,26 @@ def _neutralize_cloned_paragraph_format(paragraph):
     ("Reducción en activos no corrientes...") en negrita y subrayada por error, tanto en los .docx
     reales de Melissa como en el Word en inglés oficial de referencia (Marzo 2026). Un párrafo recién
     insertado no es un título heredado de nadie: debe partir neutro, y set_paragraph_text se encarga
-    de ponerle `{{...}}` si de verdad corresponde una frase líder en negrita."""
+    de ponerle `{{...}}` si de verdad corresponde una frase líder en negrita.
+
+    Además de negrita/subrayado (a nivel de RUN), se limpian dos propiedades a nivel de PÁRRAFO que un
+    deepcopy del vecino arrastra igual: la alineación (w:jc) y el numPr (numeración/viñeta, w:numPr).
+    Confirmado con un caso real (feedback Melissa, Oct26): una sola racha larga de párrafos nuevos al
+    principio del documento (por un descalce estructural grande entre el español definitivo y la base
+    en inglés de ESE trimestre en particular) se clonó en CADENA (cada clon nuevo parte del clon
+    anterior, ver _align_segments), y como el primer donante de la cadena resultó ser el título
+    centrado o un encabezado numerado, esa alineación centrada y esa numeración de encabezado se
+    propagaron a decenas de oraciones comunes siguientes — el documento completo quedaba centrado y con
+    numeración de lista saltada/duplicada en títulos que no correspondía. Igual que con la negrita: un
+    párrafo recién insertado no hereda alineación ni numeración de nadie, parte neutro (alineación
+    según el estilo del párrafo, sin numPr); para los ítems de viñeta de verdad, _replace_list_items ya
+    vuelve a fijar el numPr correcto después (_apply_numpr_from_source/_normalize_bullet_numbering)."""
     for r in paragraph.runs:
         r.bold = False
         r.underline = False
+    paragraph.alignment = None
+    pPr = paragraph._p.get_or_add_pPr()
+    pPr._remove_numPr()
 
 def _clone_paragraph_after(anchor_para, n=1):
     """Clona `anchor_para` (su mismo estilo/formato) `n` veces, insertando los clones inmediatamente
